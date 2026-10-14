@@ -64,4 +64,4 @@
 - **Next holiday suspension:** Sun Nov 1 (All Saints' Day)
 - **Snow/emergency suspensions:** not predictable — check [NYC DOT](https://www.nyc.gov/html/dot/html/motorist/alternate-side-parking.shtml) or 311
 
-<sub>Generated Wed Oct 14 6:56 PM ET · data: NYC Open Data parking signs</sub>
+<sub>Generated Wed Oct 14 6:57 PM ET · data: NYC Open Data parking signs</sub>
