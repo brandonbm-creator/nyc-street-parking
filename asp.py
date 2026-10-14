@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Street-cleaning (Alternate Side Parking) finder for upper Manhattan.
+"""West Side Manhattan street-cleaning (Alternate Side Parking) finder and daily digest.
 
-  python3 asp.py fetch                      # refresh data/street_cleaning.csv from NYC Open Data
-  python3 asp.py find --arrive 7:45 --leave 12:00 [--date 2026-10-15] [--town west]
+  python3 asp.py fetch                          # refresh data/street_cleaning.csv (West Side, 61st-185th)
+  python3 asp.py digest [--date 2026-10-15]     # today's digest (markdown); --out TODAY.md to save
+  python3 asp.py find --arrive 7:45 --leave 12  # full list of blocks clear for your window
 
 Stdlib only. Source: NYC DOT "Parking Regulation Locations and Signs" (nfid-uabd).
 """
@@ -16,15 +17,21 @@ import urllib.parse
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
 CLEANING_CSV = DATA / "street_cleaning.csv"
 API = "https://data.cityofnewyork.us/resource/nfid-uabd.json"
+NYC = ZoneInfo("America/New_York")
+DOT_ASP_URL = "https://www.nyc.gov/html/dot/html/motorist/alternate-side-parking.shtml"
 
 # 60th St is inside the congestion toll zone ("south of and including 60th Street"),
 # so the first toll-free street is 61st.
 MIN_STREET, MAX_STREET, FOCUS_MAX = 61, 185, 110
+DEFAULT_ARRIVE, DEFAULT_LEAVE = "7:30", "12:00"
+AREAS = [(61, 72, "Lincoln Sq (61–72)"), (73, 86, "UWS core (73–86)"),
+         (87, 96, "UWS north (87–96)"), (97, 110, "Manhattan Valley (97–110)")]
 
 DAY_NAMES = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
 DAY_ALIASES = {
@@ -36,10 +43,31 @@ DAY_RE = re.compile(r"\b(" + "|".join(sorted(DAY_ALIASES, key=len, reverse=True)
 RANGE_RE = re.compile(DAY_RE.pattern + r"\s*(?:-|THRU|TO)\s*" + DAY_RE.pattern)
 TIME_RE = re.compile(r"(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?\s*(?:-|TO)\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)")
 STREET_RE = re.compile(r"^(EAST|WEST|E|W)\s+(\d+)\s+(?:STREET|ST)\b")
+ABBREV = {"STREET": "St", "AVENUE": "Ave", "BOULEVARD": "Blvd", "PLACE": "Pl",
+          "DRIVE": "Dr", "PARKWAY": "Pkwy", "TERRACE": "Ter"}
 
 
 def norm(name):
     return " ".join((name or "").upper().split())
+
+
+def ordinal(n):
+    suffix = "th" if 11 <= n % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def pretty(name):
+    """'WEST 72 STREET' -> 'W 72nd St', 'WEST END AVENUE' -> 'West End Ave'."""
+    words = norm(name).split()
+    out = []
+    for i, w in enumerate(words):
+        if w.isdigit():
+            out.append(ordinal(int(w)))
+        elif i == 0 and w in ("WEST", "EAST") and len(words) > 1 and words[1].isdigit():
+            out.append(w[0])
+        else:
+            out.append(ABBREV.get(w, w.title()))
+    return " ".join(out)
 
 
 def street_number(name):
@@ -69,6 +97,14 @@ def to_minutes(h, m, ampm):
     elif ampm == "PM":
         h = 12 if h == 12 else h + 12
     return h * 60 + m
+
+
+def parse_hhmm(s):
+    """'7:45', '7:45AM', '8AM', '13:00' -> minutes since midnight."""
+    m = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?", s.strip().upper())
+    if not m:
+        raise argparse.ArgumentTypeError(f"bad time: {s!r}")
+    return to_minutes(*m.groups())
 
 
 def parse_schedule(desc):
@@ -110,14 +146,6 @@ def fmt_days(days):
     return "/".join(DAY_NAMES[d][:3].title() for d in sorted(days))
 
 
-def parse_hhmm(s):
-    """'7:45', '7:45AM', '8AM', '13:00' -> minutes since midnight."""
-    m = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?", s.strip().upper())
-    if not m:
-        raise argparse.ArgumentTypeError(f"bad time: {s!r}")
-    return to_minutes(*m.groups())
-
-
 # ---------------------------------------------------------------- fetch
 
 def fetch(args):
@@ -139,14 +167,14 @@ def fetch(args):
     for r in rows:
         on, frm, to = norm(r.get("on_street")), norm(r.get("from_street")), norm(r.get("to_street"))
         num, town = locate(on, frm, to)
-        if num is None or not (args.min_street <= num <= args.max_street):
+        if town != "WEST" or not (args.min_street <= num <= args.max_street):
             continue
         sched = parse_schedule(r.get("sign_description", ""))
         if not sched:
             skipped += 1
             continue
         days, start, end = sched
-        key = (num, town, on, frm, to, r.get("side_of_street", ""), fmt_days(days),
+        key = (num, on, frm, to, r.get("side_of_street", ""), fmt_days(days),
                fmt_time(start), fmt_time(end))
         groups[key]["signs"] += 1
         groups[key]["orders"].add(r.get("order_number", ""))
@@ -154,16 +182,16 @@ def fetch(args):
     DATA.mkdir(exist_ok=True)
     with CLEANING_CSV.open("w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["street_no", "town", "on_street", "from_street", "to_street", "side",
+        w.writerow(["street_no", "on_street", "from_street", "to_street", "side",
                     "days", "start", "end", "sign_count", "order_numbers"])
         for key in sorted(groups):
             g = groups[key]
             w.writerow([*key, g["signs"], " ".join(sorted(g["orders"]))])
-    print(f"Wrote {len(groups)} block-face schedules to {CLEANING_CSV.relative_to(ROOT)}"
+    print(f"Wrote {len(groups)} West Side block-face schedules to {CLEANING_CSV.relative_to(ROOT)}"
           f" ({skipped} unparseable signs skipped)")
 
 
-# ---------------------------------------------------------------- find
+# ---------------------------------------------------------------- analysis
 
 def load_suspensions():
     out = {}
@@ -173,68 +201,162 @@ def load_suspensions():
     return out
 
 
-def load_blocks():
+def load_blocks(min_street, max_street):
+    """{(street_no, on, from, to, side): [(days, start, end), ...]}"""
     if not CLEANING_CSV.exists():
         sys.exit("No data yet - run: python3 asp.py fetch")
     blocks = defaultdict(list)
     with CLEANING_CSV.open() as f:
         for r in csv.DictReader(f):
+            num = int(r["street_no"])
+            if not (min_street <= num <= max_street):
+                continue
             days = {DAY_ALIASES[d.upper()] for d in r["days"].split("/")}
-            start, end = parse_hhmm(r["start"]), parse_hhmm(r["end"])
-            key = (int(r["street_no"]), r["town"], r["on_street"], r["from_street"],
-                   r["to_street"], r["side"])
-            blocks[key].append((days, start, end))
+            key = (num, r["on_street"], r["from_street"], r["to_street"], r["side"])
+            blocks[key].append((days, parse_hhmm(r["start"]), parse_hhmm(r["end"])))
     return blocks
 
 
-def next_cleaning(scheds, date, after_min):
-    for offset in range(8):
+def status(scheds, date, arrive, leave, holidays):
+    """('clear', swept_earlier) | ('opens', minute_free) | ('blocked', None) for one block face."""
+    if date.isoformat() in holidays:
+        return "clear", False
+    today = [(s, e) for days, s, e in scheds if date.weekday() in days]
+    hits = [(s, e) for s, e in today if s < leave and e > arrive]
+    if not hits:
+        return "clear", any(e <= arrive for _, e in today)
+    free_from = max(e for _, e in hits)
+    return ("opens", free_from) if free_from < leave else ("blocked", None)
+
+
+def next_cleaning(scheds, date, after_min, holidays):
+    for offset in range(14):
         d = date + dt.timedelta(days=offset)
+        if d.isoformat() in holidays:
+            continue
         times = sorted(s for days, s, _ in scheds if d.weekday() in days
                        and (offset or s >= after_min))
         if times:
-            label = "today" if offset == 0 else d.strftime("%a")
+            label = "today" if offset == 0 else ("tomorrow" if offset == 1 else d.strftime("%a"))
             return f"{label} {fmt_time(times[0])}"
     return "-"
 
 
-def find(args):
-    date = dt.date.fromisoformat(args.date) if args.date else dt.date.today()
+def block_label(on, frm, to):
+    return f"{pretty(on)} ({pretty(frm)} → {pretty(to)})"
+
+
+def map_url(on, frm, to):
+    cross = to if "DEAD END" in frm or "RAMP" in frm else frm
+    q = f"{pretty(on)} & {pretty(cross)}, Manhattan, NY"
+    return "https://www.google.com/maps/search/?api=1&query=" + urllib.parse.quote_plus(q)
+
+
+def classify(blocks, date, arrive, leave, holidays):
+    clear, opens, blocked = [], [], []
+    for key, scheds in blocks.items():
+        kind, info = status(scheds, date, arrive, leave, holidays)
+        {"clear": clear, "opens": opens, "blocked": blocked}[kind].append((key, scheds, info))
+    clear.sort(key=lambda x: (x[0][0], not x[2]))
+    opens.sort(key=lambda x: (x[2], x[0][0]))
+    return clear, opens, blocked
+
+
+# ---------------------------------------------------------------- digest
+
+def digest(args):
+    now = dt.datetime.now(NYC)
+    date = dt.date.fromisoformat(args.date) if args.date else now.date()
     arrive, leave = parse_hhmm(args.arrive), parse_hhmm(args.leave)
-    holiday = load_suspensions().get(date.isoformat())
+    holidays = load_suspensions()
+    blocks = load_blocks(args.min_street, args.max_street)
+    clear, opens, blocked = classify(blocks, date, arrive, leave, holidays)
+    window = f"{fmt_time(arrive)}–{fmt_time(leave)}"
+
+    out = [f"# 🚗 West Side parking · {date:%a %b} {date.day}", ""]
+    if date.isoformat() in holidays:
+        out.append(f"**Street cleaning today: SUSPENDED ({holidays[date.isoformat()]})** — "
+                   "park on any side. Meters and other signs may still apply.")
+    elif not blocked and not opens:
+        out.append("**Street cleaning today: none scheduled** — every block is clear.")
+    else:
+        out.append(f"**Street cleaning today: IN EFFECT** · {len(clear)} of {len(blocks)} block faces "
+                   f"clear for {window} · W {ordinal(args.min_street)}–{ordinal(args.max_street)} St")
+    out += ["", "> Toll-free from 61st St up (60th is in the toll zone). This covers street cleaning only — "
+            "always read the posted signs for meters, no standing, and hydrants.", ""]
+
+    if blocked or opens:
+        out += [f"## ✅ Best bets — clear {window}, closest to 61st", "",
+                "| St | Block | Side | Next cleaning |", "|---|---|---|---|"]
+        for (num, on, frm, to, side), scheds, swept in clear[:args.top]:
+            note = " · swept earlier" if swept else ""
+            out.append(f"| {num} | [{block_label(on, frm, to)}]({map_url(on, frm, to)}) | {side} | "
+                       f"{next_cleaning(scheds, date, leave, holidays)}{note} |")
+
+        if opens:
+            out += ["", "## ⏱ Opens up later this morning (nearest first within each time)", "",
+                    "| Free from | St | Block | Side |", "|---|---|---|---|"]
+            nearest = sorted(opens, key=lambda x: x[0][0])[:args.top]
+            for (num, on, frm, to, side), _, free in sorted(nearest, key=lambda x: (x[2], x[0][0])):
+                out.append(f"| {fmt_time(free)} | {num} | [{block_label(on, frm, to)}]"
+                           f"({map_url(on, frm, to)}) | {side} |")
+
+        out += ["", "## 🗺 By area", "",
+                f"| Area | Clear {window} | Opens later | Cleaning during window |", "|---|---|---|---|"]
+        for lo, hi, name in AREAS:
+            if hi < args.min_street or lo > args.max_street:
+                continue
+            count = lambda rows: sum(lo <= k[0] <= hi for k, _, _ in rows)
+            out.append(f"| {name} | {count(clear)} | {count(opens)} | {count(blocked)} |")
+
+    tomorrow = date + dt.timedelta(days=1)
+    t_clear, t_opens, t_blocked = classify(blocks, tomorrow, arrive, leave, holidays)
+    if tomorrow.isoformat() in holidays:
+        t_line = f"SUSPENDED ({holidays[tomorrow.isoformat()]})"
+    elif not t_blocked and not t_opens:
+        t_line = "no street cleaning"
+    else:
+        t_line = f"in effect — {len(t_clear)} of {len(blocks)} block faces clear {window}"
+    upcoming = sorted((d, h) for d, h in holidays.items() if d > date.isoformat())
+    nxt = (f"{dt.date.fromisoformat(upcoming[0][0]):%a %b %-d} ({upcoming[0][1]})"
+           if upcoming else "none on file — add next year's calendar to data/")
+    out += ["", "## 📅 Coming up", "",
+            f"- **Tomorrow ({tomorrow:%a}):** {t_line}",
+            f"- **Next holiday suspension:** {nxt}",
+            f"- **Snow/emergency suspensions:** not predictable — check [NYC DOT]({DOT_ASP_URL}) or 311", "",
+            f"<sub>Generated {now:%a %b %-d %-I:%M %p} ET · data: NYC Open Data parking signs</sub>"]
+
+    text = "\n".join(out) + "\n"
+    if args.out:
+        Path(args.out).write_text(text)
+        print(f"Wrote {args.out}")
+    else:
+        print(text)
+
+
+# ---------------------------------------------------------------- find
+
+def find(args):
+    date = dt.date.fromisoformat(args.date) if args.date else dt.datetime.now(NYC).date()
+    arrive, leave = parse_hhmm(args.arrive), parse_hhmm(args.leave)
+    holidays = load_suspensions()
+    blocks = load_blocks(args.min_street, args.max_street)
     print(f"{date:%A %b %d, %Y}  |  park {fmt_time(arrive)}-{fmt_time(leave)}  |  "
-          f"streets {args.min_street}-{args.max_street}  |  town: {args.town}")
-    if holiday:
-        print(f"ASP SUSPENDED today ({holiday}) - street cleaning rules don't apply."
-              " Other signs (meters, no standing) may still apply.")
+          f"W {args.min_street}-{args.max_street} St")
+    if date.isoformat() in holidays:
+        print(f"ASP SUSPENDED today ({holidays[date.isoformat()]}) - street cleaning rules don't apply.")
         return
 
-    ok, conflicts = [], 0
-    for key, scheds in load_blocks().items():
-        num, town = key[0], key[1]
-        if not (args.min_street <= num <= args.max_street):
-            continue
-        if args.town != "both" and town != args.town.upper():
-            continue
-        today = [(s, e) for days, s, e in scheds if date.weekday() in days]
-        if any(s < leave and e > arrive for s, e in today):
-            conflicts += 1
-            continue
-        swept = any(e <= arrive for _, e in today)
-        ok.append((num, key, scheds, swept))
-
-    ok.sort(key=lambda x: (x[0], not x[3]))
-    print(f"{len(ok)} block faces are clear of street cleaning for your window "
-          f"({conflicts} have cleaning during it).\n")
-    print(f"{'St':>4}  {'Block':<58} {'Side':<4} {'Next cleaning':<14} Note")
-    for num, (_, _, on, frm, to, side), scheds, swept in ok[:args.limit]:
-        block = f"{on.title()} ({frm.title()} -> {to.title()})"
-        note = "swept earlier today" if swept else ""
-        print(f"{num:>4}  {block[:58]:<58} {side:<4} {next_cleaning(scheds, date, leave):<14} {note}")
-    if len(ok) > args.limit:
-        print(f"\n... {len(ok) - args.limit} more (use --limit)")
+    clear, opens, blocked = classify(blocks, date, arrive, leave, holidays)
+    print(f"{len(clear)} clear, {len(opens)} open up later, {len(blocked)} have cleaning during your window.\n")
+    print(f"{'St':>4}  {'Block':<56} {'Side':<4} {'Next cleaning':<16} Note")
+    for (num, on, frm, to, side), scheds, swept in clear[:args.limit]:
+        print(f"{num:>4}  {block_label(on, frm, to)[:56]:<56} {side:<4} "
+              f"{next_cleaning(scheds, date, leave, holidays):<16} {'swept earlier' if swept else ''}")
+    if len(clear) > args.limit:
+        print(f"\n... {len(clear) - args.limit} more (use --limit)")
     print("\nAlways read the posted signs: this only covers street cleaning, not meters,"
-          " no-standing zones, hydrants, or emergency suspensions (check @NYCASP / 311).")
+          " no-standing zones, hydrants, or emergency suspensions.")
 
 
 def main():
@@ -246,15 +368,20 @@ def main():
     f.add_argument("--max-street", type=int, default=MAX_STREET)
     f.set_defaults(func=fetch)
 
-    q = sub.add_parser("find", help="list block faces with no cleaning during your stay")
-    q.add_argument("--date", help="YYYY-MM-DD (default: today)")
-    q.add_argument("--arrive", default="8:00", help="e.g. 7:45 or 7:45AM (default 8:00)")
-    q.add_argument("--leave", default="12:00", help="e.g. 12:00 (default 12:00)")
-    q.add_argument("--min-street", type=int, default=MIN_STREET)
-    q.add_argument("--max-street", type=int, default=FOCUS_MAX)
-    q.add_argument("--town", choices=["east", "west", "both"], default="both")
-    q.add_argument("--limit", type=int, default=40)
-    q.set_defaults(func=find)
+    for name, func, help_ in [("digest", digest, "daily markdown digest"),
+                              ("find", find, "full list of blocks clear for your window")]:
+        q = sub.add_parser(name, help=help_)
+        q.add_argument("--date", help="YYYY-MM-DD (default: today, New York time)")
+        q.add_argument("--arrive", default=DEFAULT_ARRIVE, help=f"e.g. 7:45 or 7:45AM (default {DEFAULT_ARRIVE})")
+        q.add_argument("--leave", default=DEFAULT_LEAVE, help=f"e.g. 12:00 (default {DEFAULT_LEAVE})")
+        q.add_argument("--min-street", type=int, default=MIN_STREET)
+        q.add_argument("--max-street", type=int, default=FOCUS_MAX)
+        q.set_defaults(func=func)
+        if name == "digest":
+            q.add_argument("--top", type=int, default=12, help="rows per table (default 12)")
+            q.add_argument("--out", help="write markdown to this file instead of stdout")
+        else:
+            q.add_argument("--limit", type=int, default=40)
 
     args = p.parse_args()
     args.func(args)

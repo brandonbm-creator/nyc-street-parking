@@ -1,0 +1,46 @@
+name: Daily parking digest
+
+on:
+  schedule:
+    # 10:15 UTC = 6:15 AM EDT / 5:15 AM EST, Mon-Sat (no street cleaning on Sundays)
+    - cron: "15 10 * * 1-6"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Refresh sign data
+        run: python asp.py fetch || echo "::warning::fetch failed; using committed data"
+
+      - name: Build digest
+        run: python asp.py digest --out TODAY.md
+
+      - name: Commit TODAY.md and data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add TODAY.md data/street_cleaning.csv
+          git diff --cached --quiet || git commit -m "Digest for $(TZ=America/New_York date +%F)"
+          git push
+
+      - name: Post digest as an issue (sends email / GitHub app notification)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create digest --color 0E8A16 --description "Daily parking digest" --force
+          for n in $(gh issue list --label digest --state open --json number -q '.[].number'); do
+            gh issue close "$n" --reason completed
+          done
+          gh issue create --label digest --body-file TODAY.md \
+            --title "🚗 West Side parking · $(TZ=America/New_York date '+%a %b %-d')"
