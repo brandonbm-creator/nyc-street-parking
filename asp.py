@@ -4,6 +4,7 @@
   python3 asp.py fetch                          # refresh data/street_cleaning.csv (West Side, 61st-185th)
   python3 asp.py digest [--date 2026-10-15]     # today's digest (markdown); --out TODAY.md to save
   python3 asp.py find --arrive 7:45 --leave 12  # full list of blocks clear for your window
+  python3 asp.py find --near hancock            # blocks within a 5-min walk of one of our locations
   python3 asp.py export                         # write site/data.json for the web dashboard
 
 Stdlib only. Source: NYC DOT "Parking Regulation Locations and Signs" (nfid-uabd).
@@ -24,6 +25,9 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
 CLEANING_CSV = DATA / "street_cleaning.csv"
+LOCATIONS_CSV = DATA / "locations.csv"
+NEAR_METERS = 800      # keep any block face this close to one of our locations
+WALK_METERS = 400      # "nearby" in the digest: about a 5-minute walk
 API = "https://data.cityofnewyork.us/resource/nfid-uabd.json"
 NYC = ZoneInfo("America/New_York")
 DOT_ASP_URL = "https://www.nyc.gov/html/dot/html/motorist/alternate-side-parking.shtml"
@@ -148,6 +152,23 @@ def fmt_days(days):
     return "/".join(DAY_NAMES[d][:3].title() for d in sorted(days))
 
 
+def meters(a, b):
+    """Haversine distance in meters between two (lat, lon) points."""
+    lat1, lon1, lat2, lon2 = map(math.radians, (*a, *b))
+    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
+    return 2 * 6371000 * math.asin(math.sqrt(h))
+
+
+def walk_min(m):
+    """Rough walking minutes, inflating straight-line distance for the street grid."""
+    return max(1, round(m * 1.25 / 80))
+
+
+def load_locations():
+    with LOCATIONS_CSV.open() as f:
+        return [{**r, "lat": float(r["lat"]), "lon": float(r["lon"])} for r in csv.DictReader(f)]
+
+
 def state_plane_to_latlon(x_ft, y_ft):
     """NAD83 / New York Long Island (EPSG:2263, US ft) -> (lat, lon). Lambert Conformal Conic inverse."""
     a, f = 6378137.0, 1 / 298.257222101
@@ -187,17 +208,17 @@ def fetch(args):
 
     groups, skipped = defaultdict(lambda: {"signs": 0, "orders": set()}), 0
     coords = defaultdict(list)  # block face -> [(x, y), ...] for a map pin
+    in_west = {}                # block face -> inside the West Side street range?
     for r in rows:
         on, frm, to = norm(r.get("on_street")), norm(r.get("from_street")), norm(r.get("to_street"))
         num, town = locate(on, frm, to)
-        if town != "WEST" or not (args.min_street <= num <= args.max_street):
-            continue
         sched = parse_schedule(r.get("sign_description", ""))
         if not sched:
             skipped += 1
             continue
         days, start, end = sched
-        face = (num, on, frm, to, r.get("side_of_street", ""))
+        face = (num or 0, on, frm, to, r.get("side_of_street", ""))
+        in_west[face] = town == "WEST" and args.min_street <= (num or 0) <= args.max_street
         key = (*face, fmt_days(days), fmt_time(start), fmt_time(end))
         groups[key]["signs"] += 1
         groups[key]["orders"].add(r.get("order_number", ""))
@@ -208,17 +229,33 @@ def fetch(args):
 
     latlon = {face: state_plane_to_latlon(sum(x for x, _ in pts) / len(pts), sum(y for _, y in pts) / len(pts))
               for face, pts in coords.items() if pts}
+    places = load_locations()
+
+    def scope(face):
+        if in_west[face]:
+            return "west"
+        ll = latlon.get(face)
+        if ll and any(meters(ll, (p["lat"], p["lon"])) <= NEAR_METERS for p in places):
+            return "near"
+        return None
+
     DATA.mkdir(exist_ok=True)
+    kept = 0
     with CLEANING_CSV.open("w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["street_no", "on_street", "from_street", "to_street", "side",
-                    "days", "start", "end", "sign_count", "order_numbers", "lat", "lon"])
+                    "days", "start", "end", "sign_count", "order_numbers", "lat", "lon", "scope"])
         for key in sorted(groups):
+            face = key[:5]
+            sc = scope(face)
+            if not sc:
+                continue
             g = groups[key]
-            lat, lon = latlon.get(key[:5], ("", ""))
-            w.writerow([*key, g["signs"], " ".join(sorted(g["orders"])), lat, lon])
-    print(f"Wrote {len(groups)} West Side block-face schedules to {CLEANING_CSV.relative_to(ROOT)}"
-          f" ({skipped} unparseable signs skipped)")
+            lat, lon = latlon.get(face, ("", ""))
+            w.writerow([face[0] or "", *key[1:], g["signs"], " ".join(sorted(g["orders"])), lat, lon, sc])
+            kept += 1
+    print(f"Wrote {kept} block-face schedules (West Side + within {NEAR_METERS} m of our locations) to "
+          f"{CLEANING_CSV.relative_to(ROOT)} ({skipped} unparseable signs skipped)")
 
 
 def export(args):
@@ -226,17 +263,20 @@ def export(args):
     faces = {}
     with CLEANING_CSV.open() as f:
         for r in csv.DictReader(f):
-            key = (int(r["street_no"]), r["on_street"], r["from_street"], r["to_street"], r["side"])
+            key = (int(r["street_no"] or 0), r["on_street"], r["from_street"], r["to_street"], r["side"])
             face = faces.setdefault(key, {
-                "n": key[0], "on": pretty(key[1]), "from": pretty(key[2]), "to": pretty(key[3]),
+                "n": key[0] or None, "on": pretty(key[1]), "from": pretty(key[2]), "to": pretty(key[3]),
                 "side": key[4], "lat": float(r["lat"]) if r["lat"] else None,
                 "lon": float(r["lon"]) if r["lon"] else None, "s": []})
+            if r["scope"] == "near":
+                face["near"] = 1  # only shown in location views, not the West Side area views
             days = sorted(DAY_ALIASES[d.upper()] for d in r["days"].split("/"))
             face["s"].append([days, parse_hhmm(r["start"]), parse_hhmm(r["end"])])
     out = {
         "generated": dt.datetime.now(NYC).isoformat(timespec="minutes"),
         "holidays": load_suspensions(),
-        "blocks": sorted(faces.values(), key=lambda b: (b["n"], b["on"], b["side"])),
+        "places": [{k: p[k] for k in ("name", "kind", "address", "lat", "lon")} for p in load_locations()],
+        "blocks": sorted(faces.values(), key=lambda b: (b["n"] or 9999, b["on"], b["side"])),
     }
     path = ROOT / "site" / "data.json"
     path.parent.mkdir(exist_ok=True)
@@ -254,20 +294,33 @@ def load_suspensions():
     return out
 
 
-def load_blocks(min_street, max_street):
-    """{(street_no, on, from, to, side): [(days, start, end), ...]}"""
+def load_blocks(min_street, max_street, near=None):
+    """{(street_no, on, from, to, side): [(days, start, end), ...]}
+
+    Default: West Side blocks in [min_street, max_street].
+    near=(lat, lon, radius_m): every block face (any scope) within the radius instead.
+    """
     if not CLEANING_CSV.exists():
         sys.exit("No data yet - run: python3 asp.py fetch")
     blocks = defaultdict(list)
     with CLEANING_CSV.open() as f:
         for r in csv.DictReader(f):
-            num = int(r["street_no"])
-            if not (min_street <= num <= max_street):
+            num = int(r["street_no"] or 0)
+            if near:
+                if not r["lat"] or meters((float(r["lat"]), float(r["lon"])), near[:2]) > near[2]:
+                    continue
+            elif r["scope"] != "west" or not (min_street <= num <= max_street):
                 continue
             days = {DAY_ALIASES[d.upper()] for d in r["days"].split("/")}
             key = (num, r["on_street"], r["from_street"], r["to_street"], r["side"])
             blocks[key].append((days, parse_hhmm(r["start"]), parse_hhmm(r["end"])))
     return blocks
+
+
+def load_coords():
+    with CLEANING_CSV.open() as f:
+        return {(int(r["street_no"] or 0), r["on_street"], r["from_street"], r["to_street"], r["side"]):
+                (float(r["lat"]), float(r["lon"])) for r in csv.DictReader(f) if r["lat"]}
 
 
 def status(scheds, date, arrive, leave, holidays):
@@ -362,6 +415,22 @@ def digest(args):
             count = lambda rows: sum(lo <= k[0] <= hi for k, _, _ in rows)
             out.append(f"| {name} | {count(clear)} | {count(opens)} | {count(blocked)} |")
 
+    if date.isoformat() not in holidays and date.weekday() != 6:
+        coords = load_coords()
+        out += ["", f"## 📍 Near our locations (within ~{walk_min(WALK_METERS)} min walk)", "",
+                f"| Location | Clear {window} | Opens later | Nearest clear block |", "|---|---|---|---|"]
+        for p in load_locations():
+            here = (p["lat"], p["lon"])
+            c, o, _ = classify(load_blocks(0, 0, near=(*here, WALK_METERS)), date, arrive, leave, holidays)
+            best = min(c, key=lambda x: meters(coords[x[0]], here), default=None)
+            if best:
+                (_, on, frm, to, _side) = best[0]
+                nearest = (f"[{block_label(on, frm, to)}]({map_url(on, frm, to)}) · "
+                           f"{walk_min(meters(coords[best[0]], here))} min")
+            else:
+                nearest = "none within range"
+            out.append(f"| **{p['name']}** <sub>{p['kind']}</sub> | {len(c)} | {len(o)} | {nearest} |")
+
     tomorrow = date + dt.timedelta(days=1)
     t_clear, t_opens, t_blocked = classify(blocks, tomorrow, arrive, leave, holidays)
     if tomorrow.isoformat() in holidays:
@@ -393,18 +462,31 @@ def find(args):
     date = dt.date.fromisoformat(args.date) if args.date else dt.datetime.now(NYC).date()
     arrive, leave = parse_hhmm(args.arrive), parse_hhmm(args.leave)
     holidays = load_suspensions()
-    blocks = load_blocks(args.min_street, args.max_street)
-    print(f"{date:%A %b %d, %Y}  |  park {fmt_time(arrive)}-{fmt_time(leave)}  |  "
-          f"W {args.min_street}-{args.max_street} St")
+    where = f"W {args.min_street}-{args.max_street} St"
+    if args.near:
+        matches = [p for p in load_locations() if args.near.lower() in p["name"].lower()]
+        if not matches:
+            sys.exit(f"No location matches {args.near!r}. See data/locations.csv.")
+        here = (matches[0]["lat"], matches[0]["lon"])
+        blocks = load_blocks(0, 0, near=(*here, args.radius))
+        where = f"within {args.radius} m of {matches[0]['name']}"
+    else:
+        blocks = load_blocks(args.min_street, args.max_street)
+    print(f"{date:%A %b %d, %Y}  |  park {fmt_time(arrive)}-{fmt_time(leave)}  |  {where}")
     if date.isoformat() in holidays:
         print(f"ASP SUSPENDED today ({holidays[date.isoformat()]}) - street cleaning rules don't apply.")
         return
 
     clear, opens, blocked = classify(blocks, date, arrive, leave, holidays)
+    if args.near:
+        coords = load_coords()
+        dist = lambda key: meters(coords[key], here) if key in coords else float("inf")
+        clear.sort(key=lambda x: dist(x[0]))
     print(f"{len(clear)} clear, {len(opens)} open up later, {len(blocked)} have cleaning during your window.\n")
-    print(f"{'St':>4}  {'Block':<56} {'Side':<4} {'Next cleaning':<16} Note")
+    print(f"{'St' if not args.near else 'Walk':>4}  {'Block':<56} {'Side':<4} {'Next cleaning':<16} Note")
     for (num, on, frm, to, side), scheds, swept in clear[:args.limit]:
-        print(f"{num:>4}  {block_label(on, frm, to)[:56]:<56} {side:<4} "
+        first = f"{walk_min(dist((num, on, frm, to, side)))}m" if args.near else num
+        print(f"{first:>4}  {block_label(on, frm, to)[:56]:<56} {side:<4} "
               f"{next_cleaning(scheds, date, leave, holidays):<16} {'swept earlier' if swept else ''}")
     if len(clear) > args.limit:
         print(f"\n... {len(clear) - args.limit} more (use --limit)")
@@ -437,6 +519,8 @@ def main():
             q.add_argument("--out", help="write markdown to this file instead of stdout")
         else:
             q.add_argument("--limit", type=int, default=40)
+            q.add_argument("--near", help="location name (or part of it) from data/locations.csv, e.g. hancock")
+            q.add_argument("--radius", type=int, default=WALK_METERS, help=f"meters (default {WALK_METERS})")
 
     args = p.parse_args()
     args.func(args)

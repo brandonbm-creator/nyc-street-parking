@@ -10,16 +10,21 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="v-uws">
   <main class="app">
     <section class="panel">
       <header class="top">
         <div>
           <h1>West Side Parking</h1>
-          <p class="sub">Street cleaning · W 61st St and up · toll-free</p>
+          <p class="sub">Street cleaning · W 61st St and up · our Harlem &amp; Washington Heights locations</p>
         </div>
         <button id="locate" class="ghost" title="Center map on me">◎</button>
       </header>
+
+      <div class="seg view" id="view-seg">
+        <button data-view="uws" class="on">Upper West Side</button>
+        <button data-view="places">Our locations</button>
+      </div>
 
       <div class="controls">
         <div class="seg" id="day-seg">
@@ -31,9 +36,14 @@
           <label>Arrive <input type="time" id="arrive" value="07:30"></label>
           <label>Leave <input type="time" id="leave" value="12:00"></label>
         </div>
-        <label class="range"><span>Up to <b id="max-label">110th</b> St</span>
+        <label class="range uws-only"><span>Up to <b id="max-label">110th</b> St</span>
           <input type="range" id="max" min="65" max="185" step="1" value="110">
         </label>
+        <div class="seg places-only" id="radius-seg">
+          <button data-r="250">~4 min walk</button>
+          <button data-r="400" class="on">~6 min</button>
+          <button data-r="800">~12 min</button>
+        </div>
       </div>
 
       <div id="status" class="status"></div>

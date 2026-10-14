@@ -47,10 +47,25 @@
 | UWS north (87–96) | 129 | 31 | 0 |
 | Manhattan Valley (97–110) | 195 | 30 | 0 |
 
+## 📍 Near our locations (within ~6 min walk)
+
+| Location | Clear 7:30AM–12PM | Opens later | Nearest clear block |
+|---|---|---|---|
+| **600 W 146th St / 3559 Broadway** <sub>Store</sub> | 57 | 24 | [W 146th St (Riverside Dr → Broadway)](https://www.google.com/maps/search/?api=1&query=W+146th+St+%26+Riverside+Dr%2C+Manhattan%2C+NY) · 1 min |
+| **3920 Broadway** <sub>Store</sub> | 67 | 40 | [W 165th St (Broadway → St Nicholas Ave)](https://www.google.com/maps/search/?api=1&query=W+165th+St+%26+Broadway%2C+Manhattan%2C+NY) · 1 min |
+| **1502 St Nicholas Ave** <sub>Store</sub> | 88 | 49 | [W 185th St (Audubon Ave → Saint Nicholas Ave)](https://www.google.com/maps/search/?api=1&query=W+185th+St+%26+Audubon+Ave%2C+Manhattan%2C+NY) · 1 min |
+| **6 Hancock Pl** <sub>HQ (new)</sub> | 94 | 14 | [W 123rd St (Manhattan Ave → Morningside Ave)](https://www.google.com/maps/search/?api=1&query=W+123rd+St+%26+Manhattan+Ave%2C+Manhattan%2C+NY) · 1 min |
+| **121 Lenox Ave** <sub>Site</sub> | 101 | 0 | [Lenox Ave (W 117th St → W 116th St)](https://www.google.com/maps/search/?api=1&query=Lenox+Ave+%26+W+117th+St%2C+Manhattan%2C+NY) · 1 min |
+| **145th St & Lenox Ave** <sub>Site</sub> | 49 | 8 | [Lenox Ave (W 145th St → W 144th St)](https://www.google.com/maps/search/?api=1&query=Lenox+Ave+%26+W+145th+St%2C+Manhattan%2C+NY) · 1 min |
+
 ## 📅 Coming up
 
 - **Tomorrow (Thu):** in effect — 297 of 750 block faces clear 7:30AM–12PM
 - **Next holiday suspension:** Sun Nov 1 (All Saints' Day)
 - **Snow/emergency suspensions:** not predictable — check [NYC DOT](https://www.nyc.gov/html/dot/html/motorist/alternate-side-parking.shtml) or 311
 
+<<<<<<< Updated upstream
 <sub>Generated Wed Oct 14 6:38 PM ET · data: NYC Open Data parking signs</sub>
+=======
+<sub>Generated Wed Oct 14 6:45 PM ET · data: NYC Open Data parking signs</sub>
+>>>>>>> Stashed changes

@@ -102,3 +102,16 @@ h1 { font-size: 22px; margin: 0; letter-spacing: -0.02em; }
   .row label { font-size: 12px; padding: 6px 8px; }
   .legend { bottom: 10px; }
 }
+
+/* View switch + location tiles */
+.seg.view { margin-top: 14px; }
+.seg.view button { font-weight: 600; }
+body.v-uws .places-only, body.v-places .uws-only { display: none !important; }
+.place .name { font-weight: 650; font-size: 13px; color: var(--ink); }
+.place .kind { font-size: 11px; color: var(--muted); }
+.place .near { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.pin { background: var(--accent); color: #fff; border: 2px solid #fff; border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg); width: 26px; height: 26px; box-shadow: 0 2px 8px rgba(0,0,0,.35);
+  display: grid; place-items: center; }
+.pin span { transform: rotate(45deg); font-size: 12px; font-weight: 700; }
+.pin.on { background: #7c3aed; width: 32px; height: 32px; }
