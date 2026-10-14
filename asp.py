@@ -4,6 +4,7 @@
   python3 asp.py fetch                          # refresh data/street_cleaning.csv (West Side, 61st-185th)
   python3 asp.py digest [--date 2026-10-15]     # today's digest (markdown); --out TODAY.md to save
   python3 asp.py find --arrive 7:45 --leave 12  # full list of blocks clear for your window
+  python3 asp.py export                         # write site/data.json for the web dashboard
 
 Stdlib only. Source: NYC DOT "Parking Regulation Locations and Signs" (nfid-uabd).
 """
@@ -11,6 +12,7 @@ import argparse
 import csv
 import datetime as dt
 import json
+import math
 import re
 import sys
 import urllib.parse
@@ -146,6 +148,26 @@ def fmt_days(days):
     return "/".join(DAY_NAMES[d][:3].title() for d in sorted(days))
 
 
+def state_plane_to_latlon(x_ft, y_ft):
+    """NAD83 / New York Long Island (EPSG:2263, US ft) -> (lat, lon). Lambert Conformal Conic inverse."""
+    a, f = 6378137.0, 1 / 298.257222101
+    e = math.sqrt(2 * f - f * f)
+    lat1, lat2, lat0, lon0 = (math.radians(v) for v in (41.0333333333, 40.6666666667, 40.1666666667, -74.0))
+    m = lambda p: math.cos(p) / math.sqrt(1 - (e * math.sin(p)) ** 2)
+    t = lambda p: math.tan(math.pi / 4 - p / 2) / ((1 - e * math.sin(p)) / (1 + e * math.sin(p))) ** (e / 2)
+    n = (math.log(m(lat1)) - math.log(m(lat2))) / (math.log(t(lat1)) - math.log(t(lat2)))
+    F = m(lat1) / (n * t(lat1) ** n)
+    rho0 = a * F * t(lat0) ** n
+    ft = 1200 / 3937
+    dx, dy = x_ft * ft - 300000.0, rho0 - y_ft * ft
+    tt = (math.hypot(dx, dy) / (a * F)) ** (1 / n)
+    lon = math.atan2(dx, dy) / n + lon0
+    lat = math.pi / 2 - 2 * math.atan(tt)
+    for _ in range(6):
+        lat = math.pi / 2 - 2 * math.atan(tt * ((1 - e * math.sin(lat)) / (1 + e * math.sin(lat))) ** (e / 2))
+    return round(math.degrees(lat), 6), round(math.degrees(lon), 6)
+
+
 # ---------------------------------------------------------------- fetch
 
 def fetch(args):
@@ -164,6 +186,7 @@ def fetch(args):
         offset += page
 
     groups, skipped = defaultdict(lambda: {"signs": 0, "orders": set()}), 0
+    coords = defaultdict(list)  # block face -> [(x, y), ...] for a map pin
     for r in rows:
         on, frm, to = norm(r.get("on_street")), norm(r.get("from_street")), norm(r.get("to_street"))
         num, town = locate(on, frm, to)
@@ -174,21 +197,51 @@ def fetch(args):
             skipped += 1
             continue
         days, start, end = sched
-        key = (num, on, frm, to, r.get("side_of_street", ""), fmt_days(days),
-               fmt_time(start), fmt_time(end))
+        face = (num, on, frm, to, r.get("side_of_street", ""))
+        key = (*face, fmt_days(days), fmt_time(start), fmt_time(end))
         groups[key]["signs"] += 1
         groups[key]["orders"].add(r.get("order_number", ""))
+        try:
+            coords[face].append((float(r["sign_x_coord"]), float(r["sign_y_coord"])))
+        except (KeyError, ValueError):
+            pass
 
+    latlon = {face: state_plane_to_latlon(sum(x for x, _ in pts) / len(pts), sum(y for _, y in pts) / len(pts))
+              for face, pts in coords.items() if pts}
     DATA.mkdir(exist_ok=True)
     with CLEANING_CSV.open("w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["street_no", "on_street", "from_street", "to_street", "side",
-                    "days", "start", "end", "sign_count", "order_numbers"])
+                    "days", "start", "end", "sign_count", "order_numbers", "lat", "lon"])
         for key in sorted(groups):
             g = groups[key]
-            w.writerow([*key, g["signs"], " ".join(sorted(g["orders"]))])
+            lat, lon = latlon.get(key[:5], ("", ""))
+            w.writerow([*key, g["signs"], " ".join(sorted(g["orders"])), lat, lon])
     print(f"Wrote {len(groups)} West Side block-face schedules to {CLEANING_CSV.relative_to(ROOT)}"
           f" ({skipped} unparseable signs skipped)")
+
+
+def export(args):
+    """Write site/data.json: one entry per block face with pretty names, pin, and schedules."""
+    faces = {}
+    with CLEANING_CSV.open() as f:
+        for r in csv.DictReader(f):
+            key = (int(r["street_no"]), r["on_street"], r["from_street"], r["to_street"], r["side"])
+            face = faces.setdefault(key, {
+                "n": key[0], "on": pretty(key[1]), "from": pretty(key[2]), "to": pretty(key[3]),
+                "side": key[4], "lat": float(r["lat"]) if r["lat"] else None,
+                "lon": float(r["lon"]) if r["lon"] else None, "s": []})
+            days = sorted(DAY_ALIASES[d.upper()] for d in r["days"].split("/"))
+            face["s"].append([days, parse_hhmm(r["start"]), parse_hhmm(r["end"])])
+    out = {
+        "generated": dt.datetime.now(NYC).isoformat(timespec="minutes"),
+        "holidays": load_suspensions(),
+        "blocks": sorted(faces.values(), key=lambda b: (b["n"], b["on"], b["side"])),
+    }
+    path = ROOT / "site" / "data.json"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps(out, separators=(",", ":"), ensure_ascii=False))
+    print(f"Wrote {len(faces)} block faces to {path.relative_to(ROOT)}")
 
 
 # ---------------------------------------------------------------- analysis
@@ -367,6 +420,8 @@ def main():
     f.add_argument("--min-street", type=int, default=MIN_STREET)
     f.add_argument("--max-street", type=int, default=MAX_STREET)
     f.set_defaults(func=fetch)
+
+    sub.add_parser("export", help="write site/data.json for the web dashboard").set_defaults(func=export)
 
     for name, func, help_ in [("digest", digest, "daily markdown digest"),
                               ("find", find, "full list of blocks clear for your window")]:

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="UWS Parking">
+  <title>West Side Parking</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app">
+    <section class="panel">
+      <header class="top">
+        <div>
+          <h1>West Side Parking</h1>
+          <p class="sub">Street cleaning · W 61st St and up · toll-free</p>
+        </div>
+        <button id="locate" class="ghost" title="Center map on me">◎</button>
+      </header>
+
+      <div class="controls">
+        <div class="seg" id="day-seg">
+          <button data-day="0" class="on">Today</button>
+          <button data-day="1">Tomorrow</button>
+          <input type="date" id="date" aria-label="Pick a date">
+        </div>
+        <div class="row">
+          <label>Arrive <input type="time" id="arrive" value="07:30"></label>
+          <label>Leave <input type="time" id="leave" value="12:00"></label>
+        </div>
+        <label class="range"><span>Up to <b id="max-label">110th</b> St</span>
+          <input type="range" id="max" min="65" max="185" step="1" value="110">
+        </label>
+      </div>
+
+      <div id="status" class="status"></div>
+
+      <div id="areas" class="areas"></div>
+
+      <div class="tabs" id="tabs">
+        <button data-tab="clear" class="on">Clear all morning</button>
+        <button data-tab="opens">Opens later</button>
+        <button data-tab="blocked">Avoid</button>
+      </div>
+      <ol id="list" class="list"></ol>
+
+      <footer class="foot">
+        <p id="upcoming"></p>
+        <p>Covers street-cleaning signs only. Always read the posted signs (meters, no standing, hydrants).
+          Snow/emergency suspensions: <a href="https://www.nyc.gov/html/dot/html/motorist/alternate-side-parking.shtml" target="_blank" rel="noopener">NYC DOT</a> · 311.</p>
+        <p id="generated" class="muted"></p>
+      </footer>
+    </section>
+
+    <section class="mapwrap">
+      <div id="map"></div>
+      <div class="legend">
+        <span><i class="dot clear"></i>Clear</span>
+        <span><i class="dot opens"></i>Opens later</span>
+        <span><i class="dot blocked"></i>Cleaning</span>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
