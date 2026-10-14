@@ -144,3 +144,4 @@ body.v-uws .places-only, body.v-places .uws-only { display: none !important; }
   body.v-places .areas { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 4px; }
   body.v-places .areas .area { flex: 0 0 62%; scroll-snap-align: start; }
 }
+#tabs button[data-tab="wait"] { flex: 1.6; }

@@ -1,7 +1,8 @@
 // Uptown Parking dashboard. Data: data.json (built by `python3 asp.py export`).
 // Street-cleaning logic mirrors asp.py status(): for a stay from `arrive` to `leave`, a block face is
-//   wait    - WAIT & TAKE: you arrive in the second half of a cleaning window that's underway. Wait in the
-//             car until the posted end time, then the spot is yours until the next cleaning (often days).
+//   wait    - WAIT & TAKE: a cleaning window's halfway mark is coming up within MAX_WAIT minutes. That's
+//             when cars start moving back in on these competitive blocks, so be there by then; the spot is
+//             yours until the next cleaning (often days).
 //   clear   - no cleaning overlaps your stay
 //   opens   - cleaning ends before you leave, but the wait is longer (or it hasn't started yet)
 //   blocked - cleaning runs until/after you leave
@@ -18,12 +19,13 @@ const AREAS = [
 const KINDS = ["wait", "clear", "opens", "blocked"];
 const COLORS = { wait: "#2563eb", clear: "#16a34a", opens: "#f59e0b", blocked: "#dc2626" };
 const HINTS = {
-  wait: "Cleaning is in its second half. Wait nearby until the posted end time, then park; the spot is yours until the next cleaning.",
+  wait: "Cars start moving back in at the halfway mark of a cleaning window. Be there by the move-in time to claim the spot; it's yours until the next cleaning. (The posted rule technically runs to the end time.)",
   clear: "No street cleaning during your stay.",
   opens: "Cleaning ends before you leave, but it's a longer wait or hasn't started yet.",
   blocked: "Cleaning runs past when you'd leave. Avoid.",
 };
 const PAGE = 40;
+const MAX_WAIT = 45; // longest worthwhile wait for a halfway mark (matches asp.py)
 const ME = -1; // state.place value for "near my current location"
 
 const $ = (s) => document.querySelector(s);
@@ -93,9 +95,13 @@ function statusOf(b, iso) {
   if (!hits.length) return { kind: "clear", swept: today.some(([, , e]) => e <= arrive) };
   const free = Math.max(...hits.map(([, , e]) => e));
   if (free >= leave) return { kind: "blocked", until: free };
-  const cur = hits.find(([, s, e]) => s <= arrive && arrive < e && e === free);
-  if (cur && arrive >= (cur[1] + cur[2]) / 2) return { kind: "wait", free, wait: free - arrive };
-  return { kind: "opens", free };
+  for (const [, s, e] of hits) {
+    const mid = Math.floor((s + e) / 2);
+    if (e === free && mid - arrive >= 0 && mid - arrive <= MAX_WAIT) return { kind: "wait", at: mid, start: s, end: e, wait: mid - arrive };
+  }
+  // Already past the halfway mark: move-in has started, so it's a scramble until the posted end.
+  const late = hits.find(([, s, e]) => s <= arrive && arrive < e && arrive > (s + e) / 2);
+  return { kind: "opens", free, since: late && Math.floor((late[1] + late[2]) / 2) };
 }
 function nextCleaning(b, iso, after) {
   for (let i = 0; i < 14; i++) {
@@ -168,7 +174,7 @@ function renderStatus() {
     el.className = "status on";
     el.innerHTML = `<div class="big">Cleaning in effect</div>
       <div class="small">${fmtDate(iso)} · <b>${c.clear}</b> of ${rows.length} block faces clear ${win}${scope}</div>
-      ${c.wait ? `<div class="prime">⭐ ${c.wait} wait-&amp;-take spot${c.wait > 1 ? "s" : ""}, shortest wait ${best.st.wait} min</div>` : ""}`;
+      ${c.wait ? `<div class="prime">⭐ ${c.wait} wait-&amp;-take spot${c.wait > 1 ? "s" : ""} · next move-in ${best.st.wait ? `${fmtTime(best.st.at)} (${best.st.wait} min)` : "now"}</div>` : ""}`;
   }
 }
 
@@ -217,9 +223,9 @@ function visibleRows() {
 }
 
 function badge(b, st) {
-  if (st.kind === "wait") return `<span class="badge wait">wait ${st.wait} min → yours till ${nextCleaning(b, state.date, st.free)}</span>`;
+  if (st.kind === "wait") return `<span class="badge wait">${st.wait ? `be there by ${fmtTime(st.at)} (${st.wait} min)` : "move in now"} → yours till ${nextCleaning(b, state.date, st.end)}</span>`;
   if (st.kind === "clear") return `<span class="badge clear">${st.swept ? "swept earlier" : "clear"}</span>`;
-  if (st.kind === "opens") return `<span class="badge opens">from ${fmtTime(st.free)}</span>`;
+  if (st.kind === "opens") return `<span class="badge opens">${st.since ? `move-in since ${fmtTime(st.since)} · competitive` : `from ${fmtTime(st.free)}`}</span>`;
   return `<span class="badge blocked">until ${fmtTime(st.until)}</span>`;
 }
 
@@ -229,7 +235,7 @@ function renderList() {
   const list = $("#list");
   if (!r.length) {
     list.innerHTML = `<li class="empty">${state.tab === "wait"
-      ? `No cleaning window is in its second half at ${fmtTime(state.arrive)}. Try the Clear tab, or a time during a cleaning window.`
+      ? `No cleaning window hits its halfway mark within ${MAX_WAIT} min of ${fmtTime(state.arrive)}. Try the Clear tab, or an earlier arrival.`
       : "Nothing here for this window."}</li>`;
     return;
   }
@@ -248,9 +254,9 @@ function renderList() {
 
 function popupHtml(b, st) {
   const label = {
-    wait: `⭐ Wait ${st.wait} min (free ${fmtTime(st.free)}), then yours till ${nextCleaning(b, state.date, st.free)}`,
+    wait: `⭐ Move in at ${fmtTime(st.at)}${st.wait ? ` (${st.wait} min)` : " (now)"}, halfway through ${fmtTime(st.start)}–${fmtTime(st.end)} cleaning; then yours till ${nextCleaning(b, state.date, st.end)}`,
     clear: "Clear for your stay",
-    opens: `Opens at ${fmtTime(st.free)}`,
+    opens: st.since ? `Move-in started ${fmtTime(st.since)}; competitive until ${fmtTime(st.free)}` : `Opens at ${fmtTime(st.free)}`,
     blocked: `Cleaning until ${fmtTime(st.until)}`,
   }[st.kind];
   return `<b>${b.on}</b><br>${b.from} → ${b.to} · ${sideText(b.side)}<br>

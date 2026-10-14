@@ -28,6 +28,7 @@ CLEANING_CSV = DATA / "street_cleaning.csv"
 LOCATIONS_CSV = DATA / "locations.csv"
 NEAR_METERS = 800      # keep any block face this close to one of our locations
 WALK_METERS = 400      # "nearby" in the digest: about a 5-minute walk
+MAX_WAIT = 45          # wait & take: longest worthwhile wait for a cleaning window's halfway mark
 API = "https://data.cityofnewyork.us/resource/nfid-uabd.json"
 NYC = ZoneInfo("America/New_York")
 DOT_ASP_URL = "https://www.nyc.gov/html/dot/html/motorist/alternate-side-parking.shtml"
@@ -327,9 +328,9 @@ def status(scheds, date, arrive, leave, holidays):
     """Classify one block face for parking from `arrive` until `leave`:
 
       ('clear', swept_earlier)  no cleaning during your stay
-      ('wait', minute_free)     WAIT & TAKE: you arrive in the second half of a cleaning window that is
-                                underway; wait (≤ half the window) until it ends and the spot is yours
-                                until the next cleaning - usually days away. The prime Manhattan move.
+      ('wait', move_in_minute)  WAIT & TAKE: a cleaning window's halfway mark is coming up within MAX_WAIT
+                                minutes. That's when cars start moving back in on these competitive blocks,
+                                so be there by then; the spot is yours until the next cleaning (often days).
       ('opens', minute_free)    cleaning ends before you leave, but the wait is longer or it hasn't started
       ('blocked', None)         cleaning runs until or past when you leave
     """
@@ -342,9 +343,10 @@ def status(scheds, date, arrive, leave, holidays):
     free_from = max(e for _, e in hits)
     if free_from >= leave:
         return "blocked", None
-    current = [(s, e) for s, e in hits if s <= arrive < e and e == free_from]
-    if current and arrive >= (current[0][0] + current[0][1]) / 2:
-        return "wait", free_from
+    for s, e in hits:
+        mid = (s + e) // 2
+        if e == free_from and 0 <= mid - arrive <= MAX_WAIT:
+            return "wait", mid
     return "opens", free_from
 
 
@@ -513,12 +515,12 @@ def find(args):
           f"{len(blocked)} have cleaning during your window.\n")
 
     if wait:
-        print("WAIT & TAKE - cleaning is in its second half; wait for it to end, then the spot is yours")
-        print(f"{'Walk' if here else 'St':>4}  {'Block':<56} {'Side':<4} {'Wait':<6} Free until")
-        for key, scheds, free in wait[:args.limit]:
+        print("WAIT & TAKE - be there by the halfway mark of cleaning, when cars start moving back in")
+        print(f"{'Walk' if here else 'St':>4}  {'Block':<56} {'Side':<4} {'Move in':<8} {'Wait':<6} Then yours until")
+        for key, scheds, move_in in wait[:args.limit]:
             num, on, frm, to, side = key
-            print(f"{first_col(key):>4}  {block_label(on, frm, to)[:56]:<56} {side:<4} "
-                  f"{free - arrive:>3} m  {next_cleaning(scheds, date, free, holidays)}")
+            print(f"{first_col(key):>4}  {block_label(on, frm, to)[:56]:<56} {side:<4} {fmt_time(move_in):<8} "
+                  f"{move_in - arrive:>3} m  {next_cleaning(scheds, date, move_in, holidays)}")
         print()
 
     print("CLEAR for your whole stay")

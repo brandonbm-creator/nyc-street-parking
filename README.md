@@ -15,10 +15,14 @@ The congestion toll zone covers Manhattan "south of *and including* 60th Street,
 
 ### ⭐ Wait & take
 
-The best Manhattan spot is one where street cleaning is **in the second half of its window** when you arrive.
-Wait nearby until the posted end time (at most half the window, usually 45 minutes or less), then park. The spot
-stays yours until that side's next cleaning, which is often days later. These blocks show as **blue dots** and are
-the first tab, sorted by wait plus walk time. Each one shows something like *"wait 25 min → yours till Tue 11AM"*.
+On these competitive blocks, cars start moving back in at the **halfway mark** of a street-cleaning window
+(for example, 9:45 on a 9:00–10:30 side), not at the posted end. Wait & take finds blocks whose halfway mark is
+coming up within **45 minutes** of your arrival, so you're already there when move-in starts. Once you have the spot,
+it's yours until that side's next cleaning, which is often days later.
+
+- Shown as **blue dots** and the first tab, sorted by wait plus walk time, with labels like *"be there by 9:45 (20 min) → yours till Thu 9AM"*.
+- If you arrive after the halfway mark, the block goes under *Opens later* as *"move-in since 9:45 · competitive"*.
+- The posted rule still technically runs until the window's end time.
 
 ### Our locations
 
@@ -28,7 +32,7 @@ the first tab, sorted by wait plus walk time. Each one shows something like *"wa
 | 2 | Subway · 3920 Broadway | Subway restaurant #24100 | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=2) |
 | 3 | Subway · 1502 St Nicholas Ave | Subway restaurant #46882 | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=3) |
 | 4 | National Action Network · 6 Hancock Pl | NAN headquarters | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=4) |
-| 5 | 121 Lenox Ave | Site | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=5) |
+| 5 | ALIA · 121 Lenox Ave (aka 101 W 116th St) | Nonprofit development | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=5) |
 | 6 | 145 · W 145th St & Lenox Ave | Upcoming development | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=6) |
 | 📍 | Wherever you are | Phone location + current time | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=me&now=1) |
 
