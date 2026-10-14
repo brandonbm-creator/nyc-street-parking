@@ -1,49 +1,56 @@
-# West Side Manhattan Street Parking: Daily Street-Cleaning Digest
+# West Side Manhattan Street Parking
 
-### 👉 [Today's digest (TODAY.md)](TODAY.md)
+### 👉 Live dashboard: https://brandonbm-creator.github.io/nyc-street-parking/
 
-Every morning (Mon–Sat, ~6:15 AM ET) a GitHub Action builds a digest of **Upper West Side**
-street-cleaning (Alternate Side Parking) and posts it as a GitHub issue, which sends you an
-email or a GitHub mobile app notification. The digest includes:
+A map-first dashboard of **Upper West Side street cleaning** (Alternate Side Parking), starting at 61st St.
+The congestion toll zone covers Manhattan "south of *and including* 60th Street," so 61st is the first toll-free street.
 
-- **Street cleaning status** for the day: in effect, suspended for a holiday, or not scheduled
-- **Best bets:** block faces with no cleaning from 7:30 AM to noon, nearest to 61st St first, with Google Maps links
-- **Opens up later:** blocks you can park on once that morning's cleaning ends
-- **By area:** Lincoln Sq (61–72), UWS core (73–86), UWS north (87–96), Manhattan Valley (97–110)
-- **Coming up:** tomorrow's status and the next holiday suspension
+- **Big status card:** cleaning in effect, suspended for a holiday, or no cleaning
+- **Map:** every block face, colored green (clear for your window), amber (opens later), or red (cleaning)
+- **Area tiles:** Lincoln Sq, UWS core, UWS north, and Manhattan Valley; tap one to zoom and filter
+- **Lists:** *Clear all morning* (nearest to 61st first), *Opens later*, and *Avoid*, each with a one-tap **Go ↗** for directions
+- **Controls:** Today, Tomorrow, or any date; arrive and leave times (default 7:30 AM–noon, remembered on your device); northern limit up to 185th
 
-Why it starts at 61st St: the congestion toll zone covers Manhattan "south of *and including* 60th Street."
+On a phone, open the link in Safari, tap Share, then **Add to Home Screen** to get an app icon.
 
-## Run it locally (Python 3.10+, no dependencies)
+## How it works
 
-```sh
-python3 asp.py digest                                  # today's digest
-python3 asp.py digest --date 2026-10-16 --arrive 8:15 --leave 11
-python3 asp.py find --limit 100                        # full list of clear blocks
-python3 asp.py find --max-street 185                   # include Harlem / Washington Heights / Inwood
-python3 asp.py fetch                                   # refresh sign data (the Action does this daily)
+```
+NYC Open Data sign API ──► asp.py fetch ──► data/street_cleaning.csv
+                                              │
+                           asp.py export ──► site/data.json ──► site/ (static HTML/JS/CSS, no build)
+                           asp.py digest ──► TODAY.md (plain-text version)
 ```
 
-To get a one-word terminal shortcut, add this line to `~/.zshrc`:
+A GitHub Action (`.github/workflows/digest.yml`) runs Monday to Saturday at about 6:15 AM ET. It refreshes the data,
+commits it, and deploys `site/` to GitHub Pages. It also redeploys whenever `site/`, `asp.py`, or the holiday files change.
+
+All the street-cleaning logic runs in the browser (`site/app.js`), so the site can be edited with any tool or AI
+assistant: change the HTML, CSS, or JS, push, and it deploys.
+
+## Local use (Python 3.10+, no dependencies)
 
 ```sh
-alias parking='python3 ~/projects/nyc-street-parking/asp.py digest'
+python3 -m http.server -d site 8000          # dashboard at http://localhost:8000
+python3 asp.py digest                         # text digest in the terminal
+python3 asp.py find --max-street 185          # full list, including Harlem / Washington Heights
+python3 asp.py fetch && python3 asp.py export # refresh data by hand
 ```
 
 ## Files
 
 | File | What |
 |---|---|
-| `asp.py` | `fetch`, `digest`, and `find` commands |
-| `TODAY.md` | Latest digest (rebuilt daily by the Action) |
-| `.github/workflows/digest.yml` | Daily schedule; you can also start it by hand from the repo's **Actions** tab |
-| `data/street_cleaning.csv` | West Side street-cleaning schedules per block face, 61st–185th St |
+| `site/` | The dashboard: `index.html`, `app.js`, `style.css`, `data.json` (generated) |
+| `asp.py` | `fetch`, `export`, `digest`, and `find` commands |
+| `data/street_cleaning.csv` | West Side street-cleaning schedules per block face, 61st–185th St, with lat/lon |
 | `data/asp_suspensions_2026.csv` | 2026 holiday suspensions ([NYC DOT](https://www.nyc.gov/html/dot/html/motorist/alternate-side-parking.shtml)). **Add a 2027 file before January.** |
-| `data/my_spots.csv` | Your own log: where you parked and how it went |
+| `TODAY.md` | Plain-text digest, rebuilt daily |
+| `data/my_spots.csv` | Your own parking log; git-ignored so it stays only on your computer |
 
 ## Caveats
 
-- This only covers street-cleaning signs. Meters, No Standing zones, hydrants, bus stops, and
-  construction permits aren't included, so **always read the posted signs.**
+- This only covers street-cleaning signs. Meters, No Standing zones, hydrants, bus stops, and construction
+  permits aren't included, so **always read the posted signs.**
 - Snow and emergency suspensions aren't known in advance. Check NYC DOT or 311.
 - Source data: [Parking Regulation Locations and Signs](https://data.cityofnewyork.us/Transportation/Parking-Regulation-Locations-and-Signs/nfid-uabd).
