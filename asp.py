@@ -4,7 +4,7 @@
   python3 asp.py fetch                          # refresh data/street_cleaning.csv (West Side, 61st-185th)
   python3 asp.py digest [--date 2026-10-15]     # today's digest (markdown); --out TODAY.md to save
   python3 asp.py find --arrive 7:45 --leave 12  # full list of blocks clear for your window
-  python3 asp.py find --near hancock            # blocks within a 5-min walk of one of our locations
+  python3 asp.py find --near 3920 --arrive now  # wait-&-take + clear blocks near a location (or 'lat,lon')
   python3 asp.py export                         # write site/data.json for the web dashboard
 
 Stdlib only. Source: NYC DOT "Parking Regulation Locations and Signs" (nfid-uabd).
@@ -275,7 +275,7 @@ def export(args):
     out = {
         "generated": dt.datetime.now(NYC).isoformat(timespec="minutes"),
         "holidays": load_suspensions(),
-        "places": [{k: p[k] for k in ("name", "kind", "address", "lat", "lon")} for p in load_locations()],
+        "places": [{k: p[k] for k in ("name", "kind", "type", "address", "lat", "lon")} for p in load_locations()],
         "blocks": sorted(faces.values(), key=lambda b: (b["n"] or 9999, b["on"], b["side"])),
     }
     path = ROOT / "site" / "data.json"
@@ -324,7 +324,15 @@ def load_coords():
 
 
 def status(scheds, date, arrive, leave, holidays):
-    """('clear', swept_earlier) | ('opens', minute_free) | ('blocked', None) for one block face."""
+    """Classify one block face for parking from `arrive` until `leave`:
+
+      ('clear', swept_earlier)  no cleaning during your stay
+      ('wait', minute_free)     WAIT & TAKE: you arrive in the second half of a cleaning window that is
+                                underway; wait (≤ half the window) until it ends and the spot is yours
+                                until the next cleaning - usually days away. The prime Manhattan move.
+      ('opens', minute_free)    cleaning ends before you leave, but the wait is longer or it hasn't started
+      ('blocked', None)         cleaning runs until or past when you leave
+    """
     if date.isoformat() in holidays:
         return "clear", False
     today = [(s, e) for days, s, e in scheds if date.weekday() in days]
@@ -332,7 +340,12 @@ def status(scheds, date, arrive, leave, holidays):
     if not hits:
         return "clear", any(e <= arrive for _, e in today)
     free_from = max(e for _, e in hits)
-    return ("opens", free_from) if free_from < leave else ("blocked", None)
+    if free_from >= leave:
+        return "blocked", None
+    current = [(s, e) for s, e in hits if s <= arrive < e and e == free_from]
+    if current and arrive >= (current[0][0] + current[0][1]) / 2:
+        return "wait", free_from
+    return "opens", free_from
 
 
 def next_cleaning(scheds, date, after_min, holidays):
@@ -359,13 +372,15 @@ def map_url(on, frm, to):
 
 
 def classify(blocks, date, arrive, leave, holidays):
-    clear, opens, blocked = [], [], []
+    """-> (clear, wait, opens, blocked) lists of (key, scheds, info)."""
+    out = {"clear": [], "wait": [], "opens": [], "blocked": []}
     for key, scheds in blocks.items():
         kind, info = status(scheds, date, arrive, leave, holidays)
-        {"clear": clear, "opens": opens, "blocked": blocked}[kind].append((key, scheds, info))
-    clear.sort(key=lambda x: (x[0][0], not x[2]))
-    opens.sort(key=lambda x: (x[2], x[0][0]))
-    return clear, opens, blocked
+        out[kind].append((key, scheds, info))
+    out["clear"].sort(key=lambda x: (x[0][0], not x[2]))
+    out["wait"].sort(key=lambda x: (x[2], x[0][0]))
+    out["opens"].sort(key=lambda x: (x[2], x[0][0]))
+    return out["clear"], out["wait"], out["opens"], out["blocked"]
 
 
 # ---------------------------------------------------------------- digest
@@ -376,7 +391,8 @@ def digest(args):
     arrive, leave = parse_hhmm(args.arrive), parse_hhmm(args.leave)
     holidays = load_suspensions()
     blocks = load_blocks(args.min_street, args.max_street)
-    clear, opens, blocked = classify(blocks, date, arrive, leave, holidays)
+    clear, wait, opens, blocked = classify(blocks, date, arrive, leave, holidays)
+    opens = wait + opens  # the morning digest lists both under "opens up later"
     window = f"{fmt_time(arrive)}–{fmt_time(leave)}"
 
     out = [f"# 🚗 West Side parking · {date:%a %b} {date.day}", ""]
@@ -421,7 +437,8 @@ def digest(args):
                 f"| Location | Clear {window} | Opens later | Nearest clear block |", "|---|---|---|---|"]
         for p in load_locations():
             here = (p["lat"], p["lon"])
-            c, o, _ = classify(load_blocks(0, 0, near=(*here, WALK_METERS)), date, arrive, leave, holidays)
+            c, w, o, _ = classify(load_blocks(0, 0, near=(*here, WALK_METERS)), date, arrive, leave, holidays)
+            o = w + o
             best = min(c, key=lambda x: meters(coords[x[0]], here), default=None)
             if best:
                 (_, on, frm, to, _side) = best[0]
@@ -432,7 +449,8 @@ def digest(args):
             out.append(f"| **{p['name']}** <sub>{p['kind']}</sub> | {len(c)} | {len(o)} | {nearest} |")
 
     tomorrow = date + dt.timedelta(days=1)
-    t_clear, t_opens, t_blocked = classify(blocks, tomorrow, arrive, leave, holidays)
+    t_clear, t_wait, t_opens, t_blocked = classify(blocks, tomorrow, arrive, leave, holidays)
+    t_opens = t_wait + t_opens
     if tomorrow.isoformat() in holidays:
         t_line = f"SUSPENDED ({holidays[tomorrow.isoformat()]})"
     elif not t_blocked and not t_opens:
@@ -459,17 +477,24 @@ def digest(args):
 # ---------------------------------------------------------------- find
 
 def find(args):
-    date = dt.date.fromisoformat(args.date) if args.date else dt.datetime.now(NYC).date()
-    arrive, leave = parse_hhmm(args.arrive), parse_hhmm(args.leave)
+    now = dt.datetime.now(NYC)
+    date = dt.date.fromisoformat(args.date) if args.date else now.date()
+    arrive = now.hour * 60 + now.minute if args.arrive.lower() == "now" else parse_hhmm(args.arrive)
+    leave = max(parse_hhmm(args.leave), arrive + 60)
     holidays = load_suspensions()
-    where = f"W {args.min_street}-{args.max_street} St"
+    where, here = f"W {args.min_street}-{args.max_street} St", None
     if args.near:
-        matches = [p for p in load_locations() if args.near.lower() in p["name"].lower()]
-        if not matches:
-            sys.exit(f"No location matches {args.near!r}. See data/locations.csv.")
-        here = (matches[0]["lat"], matches[0]["lon"])
+        if re.fullmatch(r"\s*-?\d+\.\d+\s*,\s*-?\d+\.\d+\s*", args.near):
+            here = tuple(float(v) for v in args.near.split(","))
+            label = f"{here[0]:.5f},{here[1]:.5f}"
+        else:
+            q = args.near.lower()
+            matches = [p for p in load_locations() if q in f"{p['name']} {p['kind']} {p['address']}".lower()]
+            if not matches:
+                sys.exit(f"No location matches {args.near!r}. See data/locations.csv, or pass lat,lon.")
+            here, label = (matches[0]["lat"], matches[0]["lon"]), matches[0]["name"]
         blocks = load_blocks(0, 0, near=(*here, args.radius))
-        where = f"within {args.radius} m of {matches[0]['name']}"
+        where = f"within {args.radius} m of {label}"
     else:
         blocks = load_blocks(args.min_street, args.max_street)
     print(f"{date:%A %b %d, %Y}  |  park {fmt_time(arrive)}-{fmt_time(leave)}  |  {where}")
@@ -477,16 +502,30 @@ def find(args):
         print(f"ASP SUSPENDED today ({holidays[date.isoformat()]}) - street cleaning rules don't apply.")
         return
 
-    clear, opens, blocked = classify(blocks, date, arrive, leave, holidays)
-    if args.near:
-        coords = load_coords()
-        dist = lambda key: meters(coords[key], here) if key in coords else float("inf")
+    clear, wait, opens, blocked = classify(blocks, date, arrive, leave, holidays)
+    coords = load_coords()
+    dist = lambda key: meters(coords[key], here) if here and key in coords else float("inf")
+    if here:
         clear.sort(key=lambda x: dist(x[0]))
-    print(f"{len(clear)} clear, {len(opens)} open up later, {len(blocked)} have cleaning during your window.\n")
-    print(f"{'St' if not args.near else 'Walk':>4}  {'Block':<56} {'Side':<4} {'Next cleaning':<16} Note")
-    for (num, on, frm, to, side), scheds, swept in clear[:args.limit]:
-        first = f"{walk_min(dist((num, on, frm, to, side)))}m" if args.near else num
-        print(f"{first:>4}  {block_label(on, frm, to)[:56]:<56} {side:<4} "
+        wait.sort(key=lambda x: x[2] - arrive + walk_min(dist(x[0])))  # wait + walk, shortest first
+    first_col = lambda key: f"{walk_min(dist(key))}m" if here else key[0]
+    print(f"{len(wait)} wait & take, {len(clear)} clear, {len(opens)} open up later, "
+          f"{len(blocked)} have cleaning during your window.\n")
+
+    if wait:
+        print("WAIT & TAKE - cleaning is in its second half; wait for it to end, then the spot is yours")
+        print(f"{'Walk' if here else 'St':>4}  {'Block':<56} {'Side':<4} {'Wait':<6} Free until")
+        for key, scheds, free in wait[:args.limit]:
+            num, on, frm, to, side = key
+            print(f"{first_col(key):>4}  {block_label(on, frm, to)[:56]:<56} {side:<4} "
+                  f"{free - arrive:>3} m  {next_cleaning(scheds, date, free, holidays)}")
+        print()
+
+    print("CLEAR for your whole stay")
+    print(f"{'Walk' if here else 'St':>4}  {'Block':<56} {'Side':<4} {'Next cleaning':<16} Note")
+    for key, scheds, swept in clear[:args.limit]:
+        num, on, frm, to, side = key
+        print(f"{first_col(key):>4}  {block_label(on, frm, to)[:56]:<56} {side:<4} "
               f"{next_cleaning(scheds, date, leave, holidays):<16} {'swept earlier' if swept else ''}")
     if len(clear) > args.limit:
         print(f"\n... {len(clear) - args.limit} more (use --limit)")
@@ -509,7 +548,7 @@ def main():
                               ("find", find, "full list of blocks clear for your window")]:
         q = sub.add_parser(name, help=help_)
         q.add_argument("--date", help="YYYY-MM-DD (default: today, New York time)")
-        q.add_argument("--arrive", default=DEFAULT_ARRIVE, help=f"e.g. 7:45 or 7:45AM (default {DEFAULT_ARRIVE})")
+        q.add_argument("--arrive", default=DEFAULT_ARRIVE, help=f"e.g. 7:45, 7:45AM, or 'now' (default {DEFAULT_ARRIVE})")
         q.add_argument("--leave", default=DEFAULT_LEAVE, help=f"e.g. 12:00 (default {DEFAULT_LEAVE})")
         q.add_argument("--min-street", type=int, default=MIN_STREET)
         q.add_argument("--max-street", type=int, default=FOCUS_MAX)
@@ -519,7 +558,7 @@ def main():
             q.add_argument("--out", help="write markdown to this file instead of stdout")
         else:
             q.add_argument("--limit", type=int, default=40)
-            q.add_argument("--near", help="location name (or part of it) from data/locations.csv, e.g. hancock")
+            q.add_argument("--near", help="a location (name/address/kind, e.g. 'hancock', '3920') or 'lat,lon'")
             q.add_argument("--radius", type=int, default=WALK_METERS, help=f"meters (default {WALK_METERS})")
 
     args = p.parse_args()

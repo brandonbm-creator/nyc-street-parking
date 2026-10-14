@@ -1,4 +1,4 @@
-# West Side Manhattan Street Parking
+# Uptown Manhattan Street Parking
 
 ### 👉 Live dashboard: https://brandonbm-creator.github.io/nyc-street-parking/
 
@@ -10,23 +10,35 @@ The congestion toll zone covers Manhattan "south of *and including* 60th Street,
 - **Area tiles:** Lincoln Sq, UWS core, UWS north, and Manhattan Valley; tap one to zoom and filter
 - **Lists:** *Clear all morning* (nearest to 61st first), *Opens later*, and *Avoid*, each with a one-tap **Go ↗** for directions
 - **Controls:** Today, Tomorrow, or any date; arrive and leave times (default 7:30 AM–noon, remembered on your device); northern limit up to 185th
-- **Our locations view:** a tile for each store and site with clear-block counts within a ~4, ~6, or ~12 minute walk, a walking ring on the map, and blocks listed by walk time
+- **Our locations view:** a tile for each location with clear-block counts within a ~4, ~6, or ~12 minute walk, a walking ring on the map, and blocks listed by walk time
+- **📍 Park near me now:** uses your phone's location and the current time, then shows the best options around you
+
+### ⭐ Wait & take
+
+The best Manhattan spot is one where street cleaning is **in the second half of its window** when you arrive.
+Wait nearby until the posted end time (at most half the window, usually 45 minutes or less), then park. The spot
+stays yours until that side's next cleaning, which is often days later. These blocks show as **blue dots** and are
+the first tab, sorted by wait plus walk time. Each one shows something like *"wait 25 min → yours till Tue 11AM"*.
 
 ### Our locations
 
-| # | Location | Kind | Direct link |
+| # | Location | What | Direct link |
 |---|---|---|---|
-| 1 | 600 W 146th St / 3559 Broadway (same building) | Store | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=1) |
-| 2 | 3920 Broadway | Store | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=2) |
-| 3 | 1502 St Nicholas Ave | Store | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=3) |
-| 4 | 6 Hancock Pl | HQ (new) | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=4) |
+| 1 | Subway · 3559 Broadway (at W 146th St; 600 W 146th St is the same building) | Subway restaurant #40614 | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=1) |
+| 2 | Subway · 3920 Broadway | Subway restaurant #24100 | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=2) |
+| 3 | Subway · 1502 St Nicholas Ave | Subway restaurant #46882 | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=3) |
+| 4 | National Action Network · 6 Hancock Pl | NAN headquarters | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=4) |
 | 5 | 121 Lenox Ave | Site | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=5) |
-| 6 | W 145th St & Lenox Ave | Site | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=6) |
+| 6 | 145 · W 145th St & Lenox Ave | Upcoming development | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=6) |
+| 📍 | Wherever you are | Phone location + current time | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=me&now=1) |
 
-Locations are listed in `data/locations.csv`. To add or edit one, change that file (lat/lon from
+Add `&now=1` to any link to use the current time. Save any of these links to your phone's home screen for one-tap access;
+`?place=me&now=1` is the best one-tap "find me parking" shortcut. To plan ahead, use `?place=4&date=2026-10-16&arrive=11:45`.
+
+Locations are listed in `data/locations.csv` (`type` = subway, nonprofit, development, or site, which sets the pin color).
+To add or edit one, change that file (lat/lon from
 [NYC GeoSearch](https://geosearch.planninglabs.nyc/v2/search?text=6%20Hancock%20Place%20Manhattan)) and push.
 The data refresh keeps every block face within 800 m of a location, including blocks east of 5th Ave.
-Each direct link can be saved to a phone home screen as its own shortcut.
 
 On a phone, open the link in Safari, tap Share, then **Add to Home Screen** to get an app icon.
 
@@ -51,7 +63,8 @@ assistant: change the HTML, CSS, or JS, push, and it deploys.
 python3 -m http.server -d site 8000          # dashboard at http://localhost:8000
 python3 asp.py digest                         # text digest in the terminal
 python3 asp.py find --max-street 185          # full list, including Harlem / Washington Heights
-python3 asp.py find --near hancock            # blocks within a ~6 min walk of a location
+python3 asp.py find --near 3920 --arrive now  # wait-&-take + clear blocks near a location
+python3 asp.py find --near 40.8101,-73.9538   # ...or near any lat,lon
 python3 asp.py fetch && python3 asp.py export # refresh data by hand
 ```
 

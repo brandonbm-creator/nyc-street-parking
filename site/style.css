@@ -114,4 +114,33 @@ body.v-uws .places-only, body.v-places .uws-only { display: none !important; }
   transform: rotate(-45deg); width: 26px; height: 26px; box-shadow: 0 2px 8px rgba(0,0,0,.35);
   display: grid; place-items: center; }
 .pin span { transform: rotate(45deg); font-size: 12px; font-weight: 700; }
-.pin.on { background: #7c3aed; width: 32px; height: 32px; }
+.pin.on { width: 32px; height: 32px; }
+
+/* Near-me CTA, wait & take, pin types */
+:root { --wait: #2563eb; --wait-bg: #dbeafe; }
+@media (prefers-color-scheme: dark) { :root { --wait: #60a5fa; --wait-bg: #0b2447; } }
+.cta { width: 100%; margin-top: 14px; padding: 13px 14px; border: 0; border-radius: 12px; cursor: pointer;
+  background: #2563eb; color: #fff; font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+.cta:disabled { opacity: .7; cursor: progress; }
+.tabs button { padding: 8px 6px; }
+.hint { margin: 0 0 6px; font-size: 12px; color: var(--muted); }
+.hint:empty { display: none; }
+.badge.wait { background: var(--wait-bg); color: var(--wait); }
+.dot.wait { background: var(--wait); }
+.status .prime { margin-top: 8px; font-size: 14px; font-weight: 650; color: var(--wait); }
+.pin.subway { background: #008938; } .pin.subway span { color: #ffc600; }
+.pin.nonprofit { background: #b45309; }
+.pin.development { background: #be185d; }
+.pin.site { background: #475569; }
+.pin.me { background: #2563eb; border-radius: 50%; transform: none; }
+.pin.me span { transform: none; }
+.pin.on { outline: 3px solid #7c3aed; outline-offset: 1px; }
+.place.me .name { color: var(--wait); }
+.tag { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
+.tag.subway { background: #008938; } .tag.nonprofit { background: #b45309; }
+.tag.development { background: #be185d; } .tag.site { background: #475569; } .tag.me { background: #2563eb; }
+
+@media (max-width: 820px) {
+  body.v-places .areas { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 4px; }
+  body.v-places .areas .area { flex: 0 0 62%; scroll-snap-align: start; }
+}

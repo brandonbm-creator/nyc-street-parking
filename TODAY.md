@@ -31,8 +31,8 @@
 | 8AM | 64 | [Amsterdam Ave (W 64th St → W 65th St)](https://www.google.com/maps/search/?api=1&query=Amsterdam+Ave+%26+W+64th+St%2C+Manhattan%2C+NY) | W |
 | 8AM | 64 | [Broadway (W 64th St → W 65th St)](https://www.google.com/maps/search/?api=1&query=Broadway+%26+W+64th+St%2C+Manhattan%2C+NY) | E |
 | 8AM | 65 | [Broadway (W 65th St → W 66th St)](https://www.google.com/maps/search/?api=1&query=Broadway+%26+W+65th+St%2C+Manhattan%2C+NY) | E |
-| 8AM | 66 | [Broadway (W 66th St → W 67th St)](https://www.google.com/maps/search/?api=1&query=Broadway+%26+W+66th+St%2C+Manhattan%2C+NY) | E |
 | 8AM | 66 | [Columbus Ave (W 67th St → W 66th St)](https://www.google.com/maps/search/?api=1&query=Columbus+Ave+%26+W+67th+St%2C+Manhattan%2C+NY) | W |
+| 8AM | 66 | [Broadway (W 66th St → W 67th St)](https://www.google.com/maps/search/?api=1&query=Broadway+%26+W+66th+St%2C+Manhattan%2C+NY) | E |
 | 8:30AM | 62 | [Broadway (W 63rd St → W 62nd St)](https://www.google.com/maps/search/?api=1&query=Broadway+%26+W+63rd+St%2C+Manhattan%2C+NY) | W |
 | 8:30AM | 66 | [Broadway (W 67th St → W 66th St)](https://www.google.com/maps/search/?api=1&query=Broadway+%26+W+67th+St%2C+Manhattan%2C+NY) | W |
 | 9AM | 61 | [Amsterdam Ave (W 61st St → W 62nd St)](https://www.google.com/maps/search/?api=1&query=Amsterdam+Ave+%26+W+61st+St%2C+Manhattan%2C+NY) | E |
@@ -51,12 +51,12 @@
 
 | Location | Clear 7:30AM–12PM | Opens later | Nearest clear block |
 |---|---|---|---|
-| **600 W 146th St / 3559 Broadway** <sub>Store</sub> | 57 | 24 | [W 146th St (Riverside Dr → Broadway)](https://www.google.com/maps/search/?api=1&query=W+146th+St+%26+Riverside+Dr%2C+Manhattan%2C+NY) · 1 min |
-| **3920 Broadway** <sub>Store</sub> | 67 | 40 | [W 165th St (Broadway → St Nicholas Ave)](https://www.google.com/maps/search/?api=1&query=W+165th+St+%26+Broadway%2C+Manhattan%2C+NY) · 1 min |
-| **1502 St Nicholas Ave** <sub>Store</sub> | 88 | 49 | [W 185th St (Audubon Ave → Saint Nicholas Ave)](https://www.google.com/maps/search/?api=1&query=W+185th+St+%26+Audubon+Ave%2C+Manhattan%2C+NY) · 1 min |
-| **6 Hancock Pl** <sub>HQ (new)</sub> | 94 | 14 | [W 123rd St (Manhattan Ave → Morningside Ave)](https://www.google.com/maps/search/?api=1&query=W+123rd+St+%26+Manhattan+Ave%2C+Manhattan%2C+NY) · 1 min |
+| **Subway · 3559 Broadway** <sub>Restaurant #40614 · Hamilton Hts</sub> | 57 | 24 | [W 146th St (Riverside Dr → Broadway)](https://www.google.com/maps/search/?api=1&query=W+146th+St+%26+Riverside+Dr%2C+Manhattan%2C+NY) · 1 min |
+| **Subway · 3920 Broadway** <sub>Restaurant #24100 · Washington Hts</sub> | 67 | 40 | [W 165th St (Broadway → St Nicholas Ave)](https://www.google.com/maps/search/?api=1&query=W+165th+St+%26+Broadway%2C+Manhattan%2C+NY) · 1 min |
+| **Subway · 1502 St Nicholas** <sub>Restaurant #46882 · Washington Hts</sub> | 88 | 49 | [W 185th St (Audubon Ave → Saint Nicholas Ave)](https://www.google.com/maps/search/?api=1&query=W+185th+St+%26+Audubon+Ave%2C+Manhattan%2C+NY) · 1 min |
+| **National Action Network** <sub>Headquarters</sub> | 94 | 14 | [W 123rd St (Manhattan Ave → Morningside Ave)](https://www.google.com/maps/search/?api=1&query=W+123rd+St+%26+Manhattan+Ave%2C+Manhattan%2C+NY) · 1 min |
 | **121 Lenox Ave** <sub>Site</sub> | 101 | 0 | [Lenox Ave (W 117th St → W 116th St)](https://www.google.com/maps/search/?api=1&query=Lenox+Ave+%26+W+117th+St%2C+Manhattan%2C+NY) · 1 min |
-| **145th St & Lenox Ave** <sub>Site</sub> | 49 | 8 | [Lenox Ave (W 145th St → W 144th St)](https://www.google.com/maps/search/?api=1&query=Lenox+Ave+%26+W+145th+St%2C+Manhattan%2C+NY) · 1 min |
+| **145 · 145th & Lenox** <sub>Upcoming development</sub> | 49 | 8 | [Lenox Ave (W 145th St → W 144th St)](https://www.google.com/maps/search/?api=1&query=Lenox+Ave+%26+W+145th+St%2C+Manhattan%2C+NY) · 1 min |
 
 ## 📅 Coming up
 
@@ -64,4 +64,4 @@
 - **Next holiday suspension:** Sun Nov 1 (All Saints' Day)
 - **Snow/emergency suspensions:** not predictable — check [NYC DOT](https://www.nyc.gov/html/dot/html/motorist/alternate-side-parking.shtml) or 311
 
-<sub>Generated Wed Oct 14 6:46 PM ET · data: NYC Open Data parking signs</sub>
+<sub>Generated Wed Oct 14 6:56 PM ET · data: NYC Open Data parking signs</sub>

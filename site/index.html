@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0f172a">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="UWS Parking">
-  <title>West Side Parking</title>
+  <meta name="apple-mobile-web-app-title" content="Parking">
+  <title>Uptown Parking</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -15,11 +15,12 @@
     <section class="panel">
       <header class="top">
         <div>
-          <h1>West Side Parking</h1>
-          <p class="sub">Street cleaning · W 61st St and up · our Harlem &amp; Washington Heights locations</p>
+          <h1>Uptown Parking</h1>
+          <p class="sub">Street cleaning · W 61st St and up · Subway stores, NAN, 145</p>
         </div>
-        <button id="locate" class="ghost" title="Center map on me">◎</button>
       </header>
+
+      <button id="near-me" class="cta">📍 Park near me now</button>
 
       <div class="seg view" id="view-seg">
         <button data-view="uws" class="on">Upper West Side</button>
@@ -28,6 +29,7 @@
 
       <div class="controls">
         <div class="seg" id="day-seg">
+          <button data-day="now">Now</button>
           <button data-day="0" class="on">Today</button>
           <button data-day="1">Tomorrow</button>
           <input type="date" id="date" aria-label="Pick a date">
@@ -51,10 +53,12 @@
       <div id="areas" class="areas"></div>
 
       <div class="tabs" id="tabs">
-        <button data-tab="clear" class="on">Clear all morning</button>
+        <button data-tab="wait">⭐ Wait &amp; take</button>
+        <button data-tab="clear" class="on">Clear</button>
         <button data-tab="opens">Opens later</button>
         <button data-tab="blocked">Avoid</button>
       </div>
+      <p class="hint" id="tab-hint"></p>
       <ol id="list" class="list"></ol>
 
       <footer class="foot">
@@ -68,6 +72,7 @@
     <section class="mapwrap">
       <div id="map"></div>
       <div class="legend">
+        <span><i class="dot wait"></i>Wait &amp; take</span>
         <span><i class="dot clear"></i>Clear</span>
         <span><i class="dot opens"></i>Opens later</span>
         <span><i class="dot blocked"></i>Cleaning</span>
