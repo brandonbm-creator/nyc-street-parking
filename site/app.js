@@ -1,13 +1,9 @@
 // Uptown Parking dashboard. Data: data.json (built by `python3 asp.py export`).
-// Street-cleaning logic mirrors asp.py status(): for a stay from `arrive` to `leave`, a block face is
-//   wait    - WAIT & TAKE: a cleaning window's halfway mark is coming up within MAX_WAIT minutes. That's
-//             when cars start moving back in on these competitive blocks, so be there by then; the spot is
-//             yours until the next cleaning (often days).
-//   clear   - no cleaning overlaps your stay
-//   opens   - cleaning ends before you leave, but the wait is longer (or it hasn't started yet)
-//   blocked - cleaning runs until/after you leave
+// The street-cleaning logic lives in logic.js (pure, shared with the tests); this file is the UI.
 // Views: "uws" (West Side blocks by street range) and "places" (blocks within a walk of a location or of you).
-const DAY = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const LG = ParkingLogic;
+const { DAY, fmtTime, addDays, weekday, isValidDate, parseTime, validateWindow, meters, walkMin, yearCovered } = LG;
+
 const AREAS = [
   [61, 72, "Lincoln Sq", "61–72"],
   [73, 86, "UWS core", "73–86"],
@@ -16,36 +12,45 @@ const AREAS = [
   [111, 135, "Morningside / Harlem", "111–135"],
   [136, 185, "Hamilton Hts / Wash Hts", "136–185"],
 ];
-const KINDS = ["wait", "clear", "opens", "blocked"];
-const COLORS = { wait: "#2563eb", clear: "#16a34a", opens: "#f59e0b", blocked: "#dc2626" };
+const KINDS = ["wait", "clear", "opens", "blocked", "unknown"];
+const COLORS = { wait: "#2563eb", clear: "#16a34a", opens: "#f59e0b", blocked: "#dc2626", unknown: "#6b7280" };
 const HINTS = {
-  wait: "Cars start moving back in at the halfway mark of a cleaning window. Be there by the move-in time to claim the spot; it's yours until the next cleaning. (The posted rule technically runs to the end time.)",
-  clear: "No street cleaning during your stay.",
-  opens: "Cleaning ends before you leave, but it's a longer wait or hasn't started yet.",
-  blocked: "Cleaning runs past when you'd leave. Avoid.",
+  wait: "Suggested arrival is the halfway mark of the cleaning window, when cars typically start moving back in on these competitive blocks. The posted restriction still runs to the ASP end time (NYC311 KA-01011). Vacancy isn't measured.",
+  clear: "No street cleaning during your stay. Meters, No Standing, hydrants and other signs still apply; vacancy isn't measured.",
+  opens: "ASP ends before you leave, but the halfway mark is too far off or already passed (then it's a competitive move-in until the end time).",
+  blocked: "ASP runs past when you'd leave, or an ASP sign on the block couldn't be read (gray). Avoid.",
 };
 const PAGE = 40;
-const MAX_WAIT = 45; // longest worthwhile wait for a halfway mark (matches asp.py)
-const ME = -1; // state.place value for "near my current location"
+const ME = -1;            // state.place value for "near my current location"
+const RADII = [250, 400, 800];
+const MAX_STREET = 185, MIN_MAX_STREET = 65;
 
 const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const ordinal = (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th");
+const hhmm = (min) => `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
+
 const state = {
   view: "uws",
   date: todayNY(),
   arrive: 450,
   leave: 720,
-  now: false, // true while the times track the current clock
+  now: false,       // true while the times track the current clock
   max: 110,
   area: null,
   place: 0,
-  here: null, // { lat, lon } from geolocation
+  here: null,       // { lat, lon, accuracy } from geolocation
+  geoError: null,
   radius: 400,
   tab: "clear",
   shown: PAGE,
+  problem: null,    // message when the date/window can't be evaluated
+  linkProblem: null, // a deep-link parameter that was ignored
 };
-let DATA, map, ring, meMarker, markers = new Map(), pins = [], rows = [];
+let DATA, map, ring, accRing, meMarker, pins = [], rows = [];
+const markers = new Map(); // block index -> { marker, st }
 
-// ---------------------------------------------------------------- time + distance helpers
+// ---------------------------------------------------------------- time helpers (New York clock)
 function todayNY() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
 }
@@ -54,98 +59,56 @@ function nowMinutesNY() {
     .format(new Date()).split(":").map(Number);
   return h * 60 + m;
 }
-function addDays(iso, n) {
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
-}
-function weekday(iso) { // Mon=0 .. Sun=6
-  const [y, m, d] = iso.split("-").map(Number);
-  return (new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7;
-}
 function fmtDate(iso, opts = { weekday: "long", month: "short", day: "numeric" }) {
   const [y, m, d] = iso.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { ...opts, timeZone: "UTC" });
 }
-function fmtTime(min) {
-  let h = Math.floor(min / 60), m = min % 60;
-  const ap = h < 12 || h === 24 ? "AM" : "PM";
-  h = h % 12 || 12;
-  return m ? `${h}:${String(m).padStart(2, "0")}${ap}` : `${h}${ap}`;
+function fmtStamp(iso) {
+  const t = iso ? new Date(iso) : null;
+  return t && !Number.isNaN(t.getTime()) ? t.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }) : "unknown";
 }
-const toMin = (v) => { const [h, m] = v.split(":").map(Number); return h * 60 + m; };
-const hhmm = (min) => `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
-const ordinal = (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th");
+function daysSince(iso) {
+  const t = iso ? new Date(iso) : null;
+  return t && !Number.isNaN(t.getTime()) ? Math.max(0, Math.floor((Date.now() - t.getTime()) / 86400000)) : null;
+}
 
-function meters(lat1, lon1, lat2, lon2) {
-  const r = Math.PI / 180, dLat = (lat2 - lat1) * r, dLon = (lon2 - lon1) * r;
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(dLon / 2) ** 2;
-  return 2 * 6371000 * Math.asin(Math.sqrt(h));
-}
-// Straight-line distance inflated for the street grid, at ~80 m/min. Matches asp.py walk_min().
-const walkMin = (m) => Math.max(1, Math.round((m * 1.25) / 80));
+// ---------------------------------------------------------------- places and status
 const mePlace = () => state.here && { name: "You", kind: "Your current location", type: "me", ...state.here };
 const place = () => (state.place === ME ? mePlace() : DATA.places[state.place]);
-
-// ---------------------------------------------------------------- street-cleaning logic
-function statusOf(b, iso) {
-  if (DATA.holidays[iso]) return { kind: "clear" };
-  const wd = weekday(iso), { arrive, leave } = state;
-  const today = b.s.filter(([days]) => days.includes(wd));
-  const hits = today.filter(([, s, e]) => s < leave && e > arrive);
-  if (!hits.length) return { kind: "clear", swept: today.some(([, , e]) => e <= arrive) };
-  const free = Math.max(...hits.map(([, , e]) => e));
-  if (free >= leave) return { kind: "blocked", until: free };
-  for (const [, s, e] of hits) {
-    const mid = Math.floor((s + e) / 2);
-    if (e === free && mid - arrive >= 0 && mid - arrive <= MAX_WAIT) return { kind: "wait", at: mid, start: s, end: e, wait: mid - arrive };
-  }
-  // Already past the halfway mark: move-in has started, so it's a scramble until the posted end.
-  const late = hits.find(([, s, e]) => s <= arrive && arrive < e && arrive > (s + e) / 2);
-  return { kind: "opens", free, since: late && Math.floor((late[1] + late[2]) / 2) };
-}
-function nextCleaning(b, iso, after) {
-  for (let i = 0; i < 14; i++) {
-    const d = addDays(iso, i);
-    if (DATA.holidays[d]) continue;
-    const wd = weekday(d);
-    const starts = b.s.filter(([days, s]) => days.includes(wd) && (i || s >= after)).map(([, s]) => s);
-    if (starts.length) {
-      const label = i === 0 ? "today" : i === 1 ? "tomorrow" : DAY[wd];
-      return `${label} ${fmtTime(Math.min(...starts))}`;
-    }
-  }
-  return "—";
-}
+// A face with an ASP sign we couldn't read (b.u) is "unknown": never shown as no ASP.
+const statusOf = (b) => (b.u ? { kind: "unknown" } : LG.statusOf(b.s, state.date, state.arrive, state.leave, DATA.holidays, DATA.max_wait));
+const nextLabel = (b, after) => LG.nextCleaningLabel(LG.nextCleaningAt(b.s, state.date, after, DATA.holidays), state.date);
 const schedText = (b) => b.s.map(([d, s, e]) => `${d.map((x) => DAY[x]).join("/")} ${fmtTime(s)}–${fmtTime(e)}`).join("; ");
 const sideText = (s) => ({ N: "north", S: "south", E: "east", W: "west" }[s] || s) + " side";
-const dirUrl = (b) => b.lat
+const dirUrl = (b) => b.lat != null
   ? `https://www.google.com/maps/dir/?api=1&destination=${b.lat},${b.lon}`
   : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${b.on} & ${b.from}, Manhattan, NY`)}`;
 
-// Blocks within `radius` of p, nearest first, with status for the chosen date.
+// Blocks within `radius` of p, nearest first, with status for the chosen stay.
 function nearPlace(p, radius) {
   return DATA.blocks
     .filter((b) => b.lat != null)
     .map((b) => ({ b, d: meters(p.lat, p.lon, b.lat, b.lon) }))
     .filter((x) => x.d <= radius)
     .sort((a, b) => a.d - b.d)
-    .map((x) => ({ ...x, st: statusOf(x.b, state.date) }));
+    .map((x) => ({ ...x, st: statusOf(x.b) }));
 }
 
-// ---------------------------------------------------------------- render
 function compute() {
+  state.problem = !isValidDate(state.date) ? "Pick a valid date." : validateWindow(state.arrive, state.leave);
+  if (state.problem) { rows = []; return; }
   if (state.view === "places") {
     const p = place();
     rows = p ? nearPlace(p, state.radius) : [];
   } else {
     rows = DATA.blocks
       .filter((b) => !b.near && b.n && b.n <= state.max)
-      .map((b) => ({ b, st: statusOf(b, state.date) }));
+      .map((b) => ({ b, st: statusOf(b) }));
   }
 }
 
 function counts(list) {
-  const c = { wait: 0, clear: 0, opens: 0, blocked: 0 };
+  const c = { wait: 0, clear: 0, opens: 0, blocked: 0, unknown: 0 };
   list.forEach((x) => c[x.st.kind]++);
   return c;
 }
@@ -154,42 +117,61 @@ function bar(c, total) {
   return `<div class="bar">${KINDS.map((k) => `<span style="width:${pct(k)}%;background:${COLORS[k]}"></span>`).join("")}</div>`;
 }
 
+// ---------------------------------------------------------------- render: status card and notices
 function renderStatus() {
-  const iso = state.date, hol = DATA.holidays[iso], c = counts(rows);
+  const el = $("#status"), iso = state.date, c = counts(rows);
   const win = `${state.now ? "now" : fmtTime(state.arrive)}–${fmtTime(state.leave)}`;
   const p = state.view === "places" && place();
-  const scope = p ? ` within ~${walkMin(state.radius)} min of <b>${p.type === "me" ? "you" : p.name}</b>` : "";
-  const el = $("#status");
-  if (state.view === "places" && !p) {
-    el.className = "status on";
-    el.innerHTML = `<div class="big">Where are you?</div><div class="small">Tap “Park near me now” or pick a location below.</div>`;
-  } else if (hol) {
-    el.className = "status off";
-    el.innerHTML = `<div class="big">Suspended</div><div class="small">${fmtDate(iso)} · ${hol}. Park on either side; meters may still apply.</div>`;
-  } else if (!c.wait && !c.opens && !c.blocked) {
-    el.className = "status off";
-    el.innerHTML = `<div class="big">No cleaning</div><div class="small">${fmtDate(iso)} · every block is clear ${win}${scope}.</div>`;
-  } else {
-    const best = rows.filter((r) => r.st.kind === "wait").sort((a, b) => a.st.wait - b.st.wait)[0];
-    el.className = "status on";
-    el.innerHTML = `<div class="big">Cleaning in effect</div>
-      <div class="small">${fmtDate(iso)} · <b>${c.clear}</b> of ${rows.length} block faces clear ${win}${scope}</div>
-      ${c.wait ? `<div class="prime">⭐ ${c.wait} wait-&amp;-take spot${c.wait > 1 ? "s" : ""} · next move-in ${best.st.wait ? `${fmtTime(best.st.at)} (${best.st.wait} min)` : "now"}</div>` : ""}`;
-  }
+  const scope = p ? ` within ~${walkMin(state.radius)} min of <b>${p.type === "me" ? "you" : esc(p.name)}</b>` : ` from W 61st to ${ordinal(state.max)} St`;
+  const set = (cls, big, small) => { el.className = `status ${cls}`; el.innerHTML = `<div class="big">${big}</div><div class="small">${small}</div>`; };
+
+  if (state.problem) return set("err", "Check your times", esc(state.problem));
+  if (state.view === "places" && !p) return set("on", "Where are you?", "Tap “Park near me now” or pick a location below.");
+  if (!rows.length) return set("err", "No blocks in range", `No block faces with map coordinates${scope}. Try a larger radius or another location.`);
+  const hol = DATA.holidays[iso];
+  if (hol) return set("off", "ASP suspended", `${fmtDate(iso)} · ${esc(hol)}. Street cleaning rules don't apply; meters and other signs may.`);
+  if (!c.wait && !c.opens && !c.blocked && !c.unknown) return set("off", "No ASP", `${fmtDate(iso)} · none of the ${rows.length} block faces${scope} has street cleaning ${win}.`);
+  const best = rows.filter((r) => r.st.kind === "wait").sort((a, b) => a.st.wait - b.st.wait)[0];
+  el.className = "status on";
+  el.innerHTML = `<div class="big">ASP in effect</div>
+    <div class="small">${fmtDate(iso)} · <b>${c.clear}</b> of ${rows.length} block faces have no ASP ${win}${scope}${c.unknown ? ` · ${c.unknown} with an unreadable ASP sign` : ""}</div>
+    ${c.wait ? `<div class="prime">⭐ ${c.wait} wait-&amp;-take spot${c.wait > 1 ? "s" : ""} · suggested arrival ${fmtTime(best.st.at)}${best.st.wait ? ` (${best.st.wait} min)` : " (now)"} · ASP ends ${fmtTime(best.st.end)}</div>` : ""}`;
 }
 
+function renderNotices() {
+  const notes = [];
+  const age = daysSince(DATA.source_fetched_at);
+  if (age === null) notes.push(["bad", "Sign data age is unknown; treat results with care."]);
+  else if (age > DATA.stale_days) notes.push(["bad", `Sign data is ${age} days old; the daily refresh may be failing. Posted signs win.`]);
+  if (isValidDate(state.date) && !yearCovered(DATA.holiday_years, state.date)) {
+    notes.push(["bad", `Holiday calendar for ${state.date.slice(0, 4)} isn't on file: suspensions are unknown and ASP is assumed in effect. Add data/asp_suspensions_${state.date.slice(0, 4)}.csv from NYC DOT.`]);
+  }
+  const today = todayNY(), nextYear = Number(today.slice(0, 4)) + 1;
+  if (today.slice(5, 7) === "12" && !DATA.holiday_years.includes(nextYear)) {
+    notes.push(["warn", `The ${nextYear} holiday calendar isn't on file yet. Add it before Jan 1 (see the README).`]);
+  }
+  if (state.linkProblem) notes.push(["warn", esc(state.linkProblem)]);
+  if (state.geoError) notes.push(["warn", esc(state.geoError)]);
+  if (state.view === "places" && state.place === ME && state.here && state.here.accuracy > state.radius) {
+    notes.push(["warn", `GPS accuracy is ±${Math.round(state.here.accuracy)} m, wider than your ${state.radius} m search. Results may be off; try a larger radius or wait for a better fix.`]);
+  }
+  $("#notice").innerHTML = notes.map(([cls, text]) => `<div class="n ${cls}">${text}</div>`).join("");
+}
+
+// ---------------------------------------------------------------- render: tiles, list, map
 function placeTile(p, i) {
   if (!p) {
     return `<button class="area place me ${state.place === ME ? "on" : ""}" data-place="${ME}">
       <div class="name"><i class="tag me"></i>Near me</div><div class="kind">Tap to use your location</div></button>`;
   }
-  const near = nearPlace(p, state.radius), c = counts(near);
+  const near = state.problem ? [] : nearPlace(p, state.radius), c = counts(near);
   const best = near.find((x) => x.st.kind === "clear");
+  const acc = p.type === "me" && p.accuracy ? ` · GPS ±${Math.round(p.accuracy)} m` : "";
   return `<button class="area place ${p.type === "me" ? "me" : ""} ${state.place === i ? "on" : ""}" data-place="${i}">
-    <div class="name"><i class="tag ${p.type}"></i>${p.type === "me" ? "Near me" : p.name}</div>
-    <div class="kind">${p.kind}</div>
-    <div><span class="num">${c.clear}</span> <span class="of">clear of ${near.length}</span></div>
-    <div class="near">${c.wait ? `⭐ ${c.wait} wait &amp; take · ` : ""}${best ? `closest clear ${walkMin(best.d)} min` : "no clear block in range"}</div>
+    <div class="name"><i class="tag ${p.type}"></i>${p.type === "me" ? "Near me" : esc(p.name)}</div>
+    <div class="kind">${esc(p.kind)}${acc}</div>
+    <div><span class="num">${c.clear}</span> <span class="of">no ASP of ${near.length}</span></div>
+    <div class="near">${c.wait ? `⭐ ${c.wait} wait &amp; take · ` : ""}${best ? `closest no-ASP ${walkMin(best.d)} min` : near.length ? "no no-ASP block in range" : "no blocks in range"}</div>
     ${bar(c, near.length)}
   </button>`;
 }
@@ -203,7 +185,7 @@ function renderTiles() {
     const r = rows.filter((x) => x.b.n >= lo && x.b.n <= hi), c = counts(r);
     return `<button class="area ${state.area === i ? "on" : ""}" data-area="${i}">
       <div class="name">${name} · ${range}</div>
-      <div><span class="num">${c.clear}</span> <span class="of">clear of ${r.length}</span></div>
+      <div><span class="num">${c.clear}</span> <span class="of">no ASP of ${r.length}</span></div>
       ${c.wait ? `<div class="near">⭐ ${c.wait} wait &amp; take</div>` : ""}
       ${bar(c, r.length)}
     </button>`;
@@ -211,41 +193,44 @@ function renderTiles() {
 }
 
 function visibleRows() {
-  let r = rows.filter((x) => x.st.kind === state.tab);
+  let r = rows.filter((x) => (state.tab === "blocked" ? x.st.kind === "blocked" || x.st.kind === "unknown" : x.st.kind === state.tab));
   if (state.view === "uws" && state.area !== null) {
     const [lo, hi] = AREAS[state.area];
     r = r.filter((x) => x.b.n >= lo && x.b.n <= hi);
   }
   const near = state.view === "places";
-  if (state.tab === "wait") r.sort((a, b) => (a.st.wait + (near ? walkMin(a.d) : 0)) - (b.st.wait + (near ? walkMin(b.d) : 0)) || (a.b.n || 0) - (b.b.n || 0));
+  const cost = (x) => x.st.wait + (near ? walkMin(x.d) : 0);
+  if (state.tab === "wait") r.sort((a, b) => cost(a) - cost(b) || (a.b.n || 0) - (b.b.n || 0));
   else if (!near && state.tab === "opens") r.sort((a, b) => a.b.n - b.b.n || a.st.free - b.st.free);
   return r; // otherwise uws: nearest-to-61st first (data.json order); places: nearest first
 }
 
-function badge(b, st) {
-  if (st.kind === "wait") return `<span class="badge wait">${st.wait ? `be there by ${fmtTime(st.at)} (${st.wait} min)` : "move in now"} → yours till ${nextCleaning(b, state.date, st.end)}</span>`;
-  if (st.kind === "clear") return `<span class="badge clear">${st.swept ? "swept earlier" : "clear"}</span>`;
-  if (st.kind === "opens") return `<span class="badge opens">${st.since ? `move-in since ${fmtTime(st.since)} · competitive` : `from ${fmtTime(st.free)}`}</span>`;
-  return `<span class="badge blocked">until ${fmtTime(st.until)}</span>`;
+function badge(st) {
+  if (st.kind === "wait") return `<span class="badge wait">⭐ arrive by ${fmtTime(st.at)}${st.wait ? ` (${st.wait} min)` : " (now)"} · ASP ends ${fmtTime(st.end)}</span>`;
+  if (st.kind === "clear") return `<span class="badge clear">${st.swept ? "swept earlier · no ASP" : "no ASP"}</span>`;
+  if (st.kind === "opens") return `<span class="badge opens">${st.since ? `move-in since ${fmtTime(st.since)} · competitive · ` : ""}ASP ends ${fmtTime(st.free)}</span>`;
+  if (st.kind === "unknown") return `<span class="badge unknown">⚠ unreadable ASP sign · check the posted signs</span>`;
+  return `<span class="badge blocked">ASP until ${fmtTime(st.until)}</span>`;
 }
 
 function renderList() {
-  const r = visibleRows();
-  $("#tab-hint").textContent = HINTS[state.tab];
   const list = $("#list");
+  $("#tab-hint").textContent = HINTS[state.tab];
+  if (state.problem) { list.innerHTML = `<li class="empty">${esc(state.problem)}</li>`; return; }
+  const r = visibleRows();
   if (!r.length) {
     list.innerHTML = `<li class="empty">${state.tab === "wait"
-      ? `No cleaning window hits its halfway mark within ${MAX_WAIT} min of ${fmtTime(state.arrive)}. Try the Clear tab, or an earlier arrival.`
-      : "Nothing here for this window."}</li>`;
+      ? `No cleaning window hits its halfway mark within ${DATA.max_wait} min of ${fmtTime(state.arrive)}. Try the No ASP tab, or an earlier arrival.`
+      : "Nothing here for this stay."}</li>`;
     return;
   }
   list.innerHTML = r.slice(0, state.shown).map(({ b, st, d }) => `
-    <li class="item" data-i="${DATA.blocks.indexOf(b)}">
+    <li class="item" data-i="${b.i}">
       <div class="st">${d != null ? `${walkMin(d)}<div class="meta">min</div>` : b.n}</div>
-      <div>
-        <div class="blk">${b.on}</div>
-        <div class="meta">${b.from} → ${b.to} · ${sideText(b.side)}${st.kind === "wait" ? "" : ` · next ${nextCleaning(b, state.date, state.leave)}`}</div>
-        <div style="margin-top:4px">${badge(b, st)}</div>
+      <div class="body">
+        <div class="blk">${esc(b.on)}</div>
+        <div class="meta">${esc(b.from)} → ${esc(b.to)} · ${sideText(b.side)}${st.kind === "unknown" ? "" : ` · next ASP ${nextLabel(b, st.kind === "wait" ? st.end : state.leave)}`}${b.lat == null ? " · no map pin" : ""}</div>
+        <div class="tags">${badge(st)}</div>
       </div>
       <a class="go" href="${dirUrl(b)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Go ↗</a>
     </li>`).join("") +
@@ -254,31 +239,43 @@ function renderList() {
 
 function popupHtml(b, st) {
   const label = {
-    wait: `⭐ Move in at ${fmtTime(st.at)}${st.wait ? ` (${st.wait} min)` : " (now)"}, halfway through ${fmtTime(st.start)}–${fmtTime(st.end)} cleaning; then yours till ${nextCleaning(b, state.date, st.end)}`,
-    clear: "Clear for your stay",
-    opens: st.since ? `Move-in started ${fmtTime(st.since)}; competitive until ${fmtTime(st.free)}` : `Opens at ${fmtTime(st.free)}`,
-    blocked: `Cleaning until ${fmtTime(st.until)}`,
+    wait: `⭐ Suggested arrival ${fmtTime(st.at)}${st.wait ? ` (${st.wait} min)` : " (now)"}: halfway through the ${fmtTime(st.start)}–${fmtTime(st.end)} cleaning. ASP ends ${fmtTime(st.end)}.`,
+    clear: "No ASP during your stay",
+    opens: st.since ? `Move-in started ${fmtTime(st.since)}; competitive until ASP ends ${fmtTime(st.free)}` : `ASP ends ${fmtTime(st.free)}`,
+    blocked: `ASP until ${fmtTime(st.until)}`,
+    unknown: "⚠ An ASP sign on this block couldn't be read: check the posted signs",
   }[st.kind];
-  return `<b>${b.on}</b><br>${b.from} → ${b.to} · ${sideText(b.side)}<br>
+  return `<b>${esc(b.on)}</b><br>${esc(b.from)} → ${esc(b.to)} · ${sideText(b.side)}<br>
     <span style="color:${COLORS[st.kind]};font-weight:600">${label}</span><br>
-    <span style="color:#64748b">${schedText(b)}</span><br>
-    ${st.kind === "wait" ? "" : `Next: ${nextCleaning(b, state.date, state.leave)}<br>`}
+    <span style="color:#64748b">${schedText(b) || "schedule unreadable"}</span><br>
+    ${st.kind === "unknown" ? "" : `Next ASP: ${nextLabel(b, st.kind === "wait" ? st.end : state.leave)}<br>`}
     <a href="${dirUrl(b)}" target="_blank" rel="noopener">Directions ↗</a>`;
 }
 
+const markerStyle = (st) => ({
+  radius: st.kind === "wait" ? 8 : st.kind === "clear" ? 6 : 5,
+  weight: st.kind === "wait" ? 2 : 1, color: "#fff",
+  fillColor: COLORS[st.kind], fillOpacity: st.kind === "blocked" ? 0.55 : 0.9,
+});
+
+// Markers are updated in place so an open popup survives the once-a-minute "Now" refresh.
 function renderMap() {
-  markers.forEach((m) => m.remove());
-  markers.clear();
-  rows.forEach(({ b, st }) => {
-    if (b.lat == null) return;
-    const big = st.kind === "wait" || st.kind === "clear";
-    const m = L.circleMarker([b.lat, b.lon], {
-      radius: st.kind === "wait" ? 8 : big ? 6 : 5, weight: st.kind === "wait" ? 2 : 1, color: "#fff",
-      fillColor: COLORS[st.kind], fillOpacity: st.kind === "blocked" ? 0.55 : 0.9,
-    }).bindPopup(() => popupHtml(b, st)).addTo(map);
-    if (st.kind === "wait") m.bringToFront();
-    markers.set(DATA.blocks.indexOf(b), m);
-  });
+  const wanted = new Map();
+  rows.forEach(({ b, st }) => { if (b.lat != null) wanted.set(b.i, { b, st }); });
+  for (const [i, m] of markers) if (!wanted.has(i)) { m.marker.remove(); markers.delete(i); }
+  for (const [i, { b, st }] of wanted) {
+    let m = markers.get(i);
+    if (!m) {
+      m = { marker: L.circleMarker([b.lat, b.lon], markerStyle(st)), st };
+      m.marker.bindPopup(() => popupHtml(b, markers.get(i).st)).addTo(map);
+      markers.set(i, m);
+    } else {
+      m.st = st;
+      m.marker.setStyle(markerStyle(st));
+      if (m.marker.isPopupOpen()) m.marker.getPopup().update(); // re-runs the content callback; keeps it dynamic
+    }
+    if (st.kind === "wait") m.marker.bringToFront();
+  }
   if (ring) ring.remove();
   ring = null;
   const p = state.view === "places" && place();
@@ -295,18 +292,22 @@ function pinIcon(p, i) {
 
 function renderFooter() {
   const next = Object.keys(DATA.holidays).sort().find((d) => d > state.date);
-  const tomorrow = addDays(state.date, 1);
-  const tHol = DATA.holidays[tomorrow];
-  $("#upcoming").innerHTML =
-    `<b>${fmtDate(tomorrow, { weekday: "long" })}:</b> ${tHol ? `suspended (${tHol})` : weekday(tomorrow) === 6 ? "no cleaning (Sunday)" : "cleaning in effect"}` +
-    ` · <b>Next holiday:</b> ${next ? `${fmtDate(next, { weekday: "short", month: "short", day: "numeric" })} (${DATA.holidays[next]})` : "none on file"}`;
-  $("#generated").textContent = `Sign data refreshed ${new Date(DATA.generated).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}`;
+  const tomorrow = isValidDate(state.date) ? addDays(state.date, 1) : null;
+  const tHol = tomorrow && DATA.holidays[tomorrow];
+  $("#upcoming").innerHTML = tomorrow
+    ? `<b>${fmtDate(tomorrow, { weekday: "long" })}:</b> ${tHol ? `suspended (${esc(tHol)})` : weekday(tomorrow) === 6 ? "no ASP (Sunday)" : yearCovered(DATA.holiday_years, tomorrow) ? "ASP in effect" : "ASP assumed in effect (calendar not on file)"}` +
+      ` · <b>Next holiday:</b> ${next ? `${fmtDate(next, { weekday: "short", month: "short", day: "numeric" })} (${esc(DATA.holidays[next])})` : "none on file"}`
+    : "";
+  const nc = DATA.stats && DATA.stats.faces_without_coords;
+  $("#generated").textContent = `Sign data as of ${fmtStamp(DATA.source_fetched_at)} · site built ${fmtStamp(DATA.built_at)} · ${DATA.stats.faces} block faces` +
+    (nc ? ` (${nc} without map coordinates appear in lists only)` : "");
 }
 
 function render({ fit = false } = {}) {
   compute();
   document.body.className = `v-${state.view}`;
   renderStatus();
+  renderNotices();
   renderTiles();
   renderList();
   renderMap();
@@ -317,7 +318,7 @@ function render({ fit = false } = {}) {
   sel("#radius-seg button", "r", String(state.radius));
   const dayIdx = state.now ? "now" : state.date === todayNY() ? "0" : state.date === addDays(todayNY(), 1) ? "1" : null;
   sel("#day-seg button", "day", dayIdx);
-  $("#date").value = state.date;
+  $("#date").value = isValidDate(state.date) ? state.date : "";
   $("#arrive").value = hhmm(state.arrive);
   $("#leave").value = hhmm(state.leave);
   if (fit) fitView();
@@ -337,31 +338,37 @@ function setNow() {
   state.now = true;
   state.date = todayNY();
   state.arrive = Math.floor(nowMinutesNY() / 5) * 5;
-  if (state.leave <= state.arrive + 60) state.leave = Math.min(state.arrive + 180, 23 * 60 + 55);
+  // An explicit stay is kept; only a leave time that is now in the past gets a default.
+  if (state.leave <= state.arrive) state.leave = Math.min(state.arrive + 180, 23 * 60 + 59);
 }
-// Best tab for the current results: wait & take if any, otherwise clear.
+// Best tab for the current results: wait & take if any, otherwise no ASP.
 function bestTab() {
   compute();
   state.tab = rows.some((r) => r.st.kind === "wait") ? "wait" : "clear";
 }
 
 function locateMe(then) {
-  if (!navigator.geolocation) { alert("Location isn't available in this browser."); return; }
   const btn = $("#near-me");
+  if (!navigator.geolocation) { state.geoError = "Location isn't available in this browser."; render(); return; }
   btn.disabled = true;
   btn.textContent = "📍 Finding you…";
   navigator.geolocation.getCurrentPosition((pos) => {
-    state.here = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+    state.here = { lat: pos.coords.latitude, lon: pos.coords.longitude, accuracy: pos.coords.accuracy };
+    state.geoError = null;
     if (meMarker) meMarker.remove();
+    if (accRing) accRing.remove();
     meMarker = L.marker([state.here.lat, state.here.lon], { icon: pinIcon(mePlace(), ME), zIndexOffset: 2000 })
       .bindTooltip("You", { direction: "top", offset: [0, -28] }).addTo(map);
+    if (pos.coords.accuracy) {
+      accRing = L.circle([state.here.lat, state.here.lon], { radius: pos.coords.accuracy, color: "#2563eb", weight: 1, fillOpacity: 0.08 }).addTo(map);
+    }
     btn.disabled = false;
     btn.textContent = "📍 Park near me now";
     then();
   }, (err) => {
     btn.disabled = false;
     btn.textContent = "📍 Park near me now";
-    alert(`Couldn't get your location (${err.message}). Pick one of our locations instead.`);
+    state.geoError = `Couldn't get your location (${err.message}). Pick one of our locations instead.`;
     Object.assign(state, { view: "places", place: Math.max(state.place, 0) });
     render({ fit: true });
   }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 });
@@ -384,18 +391,57 @@ function selectPlace(i) {
   render({ fit: true });
 }
 
-// ---------------------------------------------------------------- wire up
+// ---------------------------------------------------------------- persistence and deep links
 function save() {
   const { arrive, leave, max, view, radius } = state;
   const p = state.place === ME ? 0 : state.place; // don't persist "me": location goes stale
-  localStorage.setItem("uws-parking", JSON.stringify({ arrive, leave, max, view, place: p, radius }));
+  try {
+    localStorage.setItem("uws-parking", JSON.stringify({ arrive, leave, max, view, place: p, radius }));
+  } catch (e) { /* private mode or full storage: the UI must still update */ }
+}
+
+const inRange = (v, lo, hi) => Number.isInteger(v) && v >= lo && v <= hi;
+
+function restore() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem("uws-parking") || "{}") || {}; } catch (e) { saved = {}; }
+  if (inRange(saved.arrive, 0, 1439)) state.arrive = saved.arrive;
+  if (inRange(saved.leave, 0, 1439)) state.leave = saved.leave;
+  if (inRange(saved.max, MIN_MAX_STREET, MAX_STREET)) state.max = saved.max;
+  if (RADII.includes(saved.radius)) state.radius = saved.radius;
+  if (saved.view === "places" || saved.view === "uws") state.view = saved.view;
+  if (inRange(saved.place, 0, DATA.places.length - 1)) state.place = saved.place;
+  if (validateWindow(state.arrive, state.leave)) { state.arrive = 450; state.leave = 720; }
+}
+
+// ?place=4 (1-based) or ?place=me · ?now=1 · ?view=uws|places · ?radius=250|400|800 · ?date=YYYY-MM-DD · ?arrive=9:00 · ?leave=12:00
+function applyQuery(q) {
+  const ignored = [];
+  if (q.has("view")) state.view = q.get("view") === "places" ? "places" : "uws";
+  const r = Number(q.get("radius"));
+  if (q.has("radius")) { if (inRange(r, 100, 2000)) state.radius = r; else ignored.push("radius"); }
+  const wantMe = q.get("place") === "me";
+  const pi = Number(q.get("place")) - 1;
+  if (q.has("place") && !wantMe) { if (inRange(pi, 0, DATA.places.length - 1)) Object.assign(state, { view: "places", place: pi }); else ignored.push("place"); }
+  if (q.has("date")) { if (isValidDate(q.get("date"))) { state.date = q.get("date"); state.now = false; } else ignored.push("date"); }
+  const a = parseTime(q.get("arrive") || ""), l = parseTime(q.get("leave") || "");
+  if (q.has("arrive")) { if (a !== null) { state.arrive = a; state.now = false; } else ignored.push("arrive"); }
+  if (q.has("leave")) { if (l !== null) state.leave = l; else ignored.push("leave"); }
+  if (ignored.length) state.linkProblem = `Ignored invalid link parameter${ignored.length > 1 ? "s" : ""}: ${ignored.join(", ")}.`;
+  if (q.has("now")) setNow();
+  if (q.has("now") || (q.has("arrive") && a !== null)) bestTab();
+  return wantMe;
+}
+
+// ---------------------------------------------------------------- init
+function showDataProblem(msg) {
+  document.body.className = "v-uws";
+  $("#status").className = "status err";
+  $("#status").innerHTML = `<div class="big">Data unavailable</div><div class="small">${esc(msg)} Reload to try again; if it persists, the daily build is failing (see the repo's Actions tab).</div>`;
+  ["#areas", "#tabs", "#tab-hint", "#list", "#upcoming", "#generated"].forEach((s) => { $(s).innerHTML = ""; });
 }
 
 async function init() {
-  Object.assign(state, JSON.parse(localStorage.getItem("uws-parking") || "{}"));
-  $("#max").value = state.max;
-  $("#max-label").textContent = ordinal(state.max);
-
   map = L.map("map", { zoomControl: false }).setView([40.785, -73.975], 14);
   L.control.zoom({ position: "topright" }).addTo(map);
   L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -403,23 +449,41 @@ async function init() {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   }).addTo(map);
 
-  DATA = await (await fetch("data.json", { cache: "no-cache" })).json();
+  try {
+    const res = await fetch("data.json", { cache: "no-cache" });
+    if (!res.ok) throw new Error(`data.json: HTTP ${res.status}`);
+    DATA = await res.json();
+    if (!DATA || DATA.schema !== 1 || !Array.isArray(DATA.blocks) || !DATA.blocks.length || !Array.isArray(DATA.places)) {
+      throw new Error("data.json is empty or has an unexpected format.");
+    }
+  } catch (e) {
+    showDataProblem(e.message);
+    return;
+  }
+  DATA.holidays = DATA.holidays || {};
+  DATA.holiday_years = DATA.holiday_years || [];
+  DATA.stats = DATA.stats || { faces: DATA.blocks.length, faces_without_coords: DATA.blocks.filter((b) => b.lat == null).length };
+  DATA.max_wait = Number.isInteger(DATA.max_wait) ? DATA.max_wait : LG.MAX_WAIT;
+  DATA.stale_days = Number.isInteger(DATA.stale_days) ? DATA.stale_days : 7;
+  // Trust nothing in a block: drop malformed segments; a face left without any usable segment is "unknown".
+  const validSeg = (seg) => Array.isArray(seg) && Array.isArray(seg[0]) && seg[0].length > 0
+    && seg[0].every((d) => Number.isInteger(d) && d >= 0 && d <= 6)
+    && Number.isInteger(seg[1]) && Number.isInteger(seg[2]) && seg[1] >= 0 && seg[2] < 1440 && seg[2] > seg[1];
+  const finite = (v) => typeof v === "number" && Number.isFinite(v);
+  DATA.blocks.forEach((b, i) => {
+    b.i = i;
+    b.s = Array.isArray(b.s) ? b.s.filter(validSeg) : [];
+    if (!b.s.length) b.u = 1;
+    if (!(finite(b.lat) && finite(b.lon))) { b.lat = null; b.lon = null; }
+  });
 
-  // Deep links: ?place=4 (1-based) or ?place=me, ?now=1, ?view=uws, ?radius=800
-  const q = new URLSearchParams(location.search);
-  const wantMe = q.get("place") === "me";
-  if (q.has("place") && !wantMe) Object.assign(state, { view: "places", place: Number(q.get("place")) - 1 });
-  if (q.has("view")) state.view = q.get("view") === "places" ? "places" : "uws";
-  if (q.has("radius")) state.radius = Number(q.get("radius")) || state.radius;
-  if (!(state.place >= 0 && state.place < DATA.places.length)) state.place = 0;
-  if (q.has("date")) state.date = q.get("date");
-  if (q.has("arrive")) state.arrive = toMin(q.get("arrive"));
-  if (q.has("leave")) state.leave = toMin(q.get("leave"));
-  if (q.has("now")) setNow();
-  if (q.has("now") || q.has("arrive")) bestTab();
+  restore();
+  const wantMe = applyQuery(new URLSearchParams(location.search));
+  $("#max").value = state.max;
+  $("#max-label").textContent = ordinal(state.max);
 
   pins = DATA.places.map((p, i) => L.marker([p.lat, p.lon], { icon: pinIcon(p, i), zIndexOffset: 1000 })
-    .bindTooltip(`<b>${p.name}</b><br>${p.kind}`, { direction: "top", offset: [0, -28] })
+    .bindTooltip(`<b>${esc(p.name)}</b><br>${esc(p.kind)}`, { direction: "top", offset: [0, -28] })
     .on("click", () => selectPlace(i))
     .addTo(map));
   render({ fit: true });
@@ -433,9 +497,9 @@ async function init() {
     save(); render({ fit: true });
   });
   $("#radius-seg").addEventListener("click", (e) => {
-    const r = e.target.dataset.r;
-    if (!r) return;
-    Object.assign(state, { radius: Number(r), shown: PAGE });
+    const r = Number(e.target.dataset.r);
+    if (!RADII.includes(r)) return;
+    Object.assign(state, { radius: r, shown: PAGE });
     save(); render({ fit: true });
   });
   $("#day-seg").addEventListener("click", (e) => {
@@ -445,12 +509,23 @@ async function init() {
     else { state.now = false; state.date = addDays(todayNY(), Number(d)); }
     render();
   });
-  $("#date").addEventListener("change", (e) => { if (e.target.value) { state.now = false; state.date = e.target.value; render(); } });
-  $("#arrive").addEventListener("change", (e) => { state.now = false; state.arrive = toMin(e.target.value); save(); render(); });
-  $("#leave").addEventListener("change", (e) => { state.leave = toMin(e.target.value); save(); render(); });
+  $("#date").addEventListener("change", (e) => {
+    if (!isValidDate(e.target.value)) { e.target.value = isValidDate(state.date) ? state.date : ""; return; }
+    state.now = false; state.date = e.target.value; render();
+  });
+  $("#arrive").addEventListener("change", (e) => {
+    const v = parseTime(e.target.value);
+    if (v === null) { e.target.value = hhmm(state.arrive); return; }
+    state.now = false; state.arrive = v; save(); render();
+  });
+  $("#leave").addEventListener("change", (e) => {
+    const v = parseTime(e.target.value);
+    if (v === null) { e.target.value = hhmm(state.leave); return; }
+    state.leave = v; save(); render();
+  });
   $("#max").addEventListener("input", (e) => { $("#max-label").textContent = ordinal(+e.target.value); });
   $("#max").addEventListener("change", (e) => {
-    state.max = +e.target.value;
+    state.max = Math.min(MAX_STREET, Math.max(MIN_MAX_STREET, +e.target.value || 110));
     if (state.area !== null && AREAS[state.area][0] > state.max) state.area = null;
     save(); render({ fit: true });
   });
@@ -465,7 +540,7 @@ async function init() {
   });
   $("#tabs").addEventListener("click", (e) => {
     const t = e.target.closest("button")?.dataset.tab;
-    if (!t) return;
+    if (!t || !KINDS.includes(t)) return;
     state.tab = t;
     state.shown = PAGE;
     render();
@@ -475,11 +550,11 @@ async function init() {
     const li = e.target.closest(".item");
     const m = li && markers.get(Number(li.dataset.i));
     if (!m) return;
-    map.flyTo(m.getLatLng(), 17, { duration: 0.6 });
-    m.openPopup();
+    map.flyTo(m.marker.getLatLng(), 17, { duration: 0.6 });
+    m.marker.openPopup();
     if (innerWidth <= 820) window.scrollTo({ top: 0, behavior: "smooth" });
   });
-  // Keep "Now" honest if the page stays open.
+  // Keep "Now" honest if the page stays open; markers update in place so an open popup stays open.
   setInterval(() => { if (state.now) { setNow(); render(); } }, 60000);
 }
 

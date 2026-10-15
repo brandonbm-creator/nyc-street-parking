@@ -6,8 +6,10 @@
   <meta name="theme-color" content="#0f172a">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Parking">
+  <meta name="description" content="Upper Manhattan street-cleaning (ASP) parking finder: Upper West Side from 61st St and our Harlem and Washington Heights locations.">
   <title>Uptown Parking</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body class="v-uws">
@@ -16,7 +18,7 @@
       <header class="top">
         <div>
           <h1>Uptown Parking</h1>
-          <p class="sub">Street cleaning · W 61st St and up · Subway stores, NAN, 145</p>
+          <p class="sub">Street cleaning (ASP) · W 61st St and up · Subway stores, NAN, ALIA, 145</p>
         </div>
       </header>
 
@@ -48,14 +50,15 @@
         </div>
       </div>
 
-      <div id="status" class="status"></div>
+      <div id="notice" class="notice"></div>
+      <div id="status" class="status"><div class="big">Loading…</div><div class="small">Fetching street-cleaning data.</div></div>
 
       <div id="areas" class="areas"></div>
 
       <div class="tabs" id="tabs">
         <button data-tab="wait">⭐ Wait &amp; take</button>
-        <button data-tab="clear" class="on">Clear</button>
-        <button data-tab="opens">Opens later</button>
+        <button data-tab="clear" class="on">No ASP</button>
+        <button data-tab="opens">Ends later</button>
         <button data-tab="blocked">Avoid</button>
       </div>
       <p class="hint" id="tab-hint"></p>
@@ -63,9 +66,12 @@
 
       <footer class="foot">
         <p id="upcoming"></p>
-        <p>Covers street-cleaning signs only. Always read the posted signs (meters, no standing, hydrants).
+        <p>Covers street-cleaning (ASP) signs only: meters, No Standing, hydrants, bus stops and construction permits aren't
+          included, and vacancy isn't measured. <b>Always read the posted signs.</b> The posted ASP restriction runs to its end
+          time even after the sweeper passes (<a href="https://portal.311.nyc.gov/article/?kanumber=KA-01011" target="_blank" rel="noopener">NYC311</a>).
           Snow/emergency suspensions: <a href="https://www.nyc.gov/html/dot/html/motorist/alternate-side-parking.shtml" target="_blank" rel="noopener">NYC DOT</a> · 311.</p>
         <p id="generated" class="muted"></p>
+        <p class="muted">v1.0 · <a href="https://github.com/brandonbm-creator/nyc-street-parking" target="_blank" rel="noopener">source</a></p>
       </footer>
     </section>
 
@@ -73,14 +79,17 @@
       <div id="map"></div>
       <div class="legend">
         <span><i class="dot wait"></i>Wait &amp; take</span>
-        <span><i class="dot clear"></i>Clear</span>
-        <span><i class="dot opens"></i>Opens later</span>
-        <span><i class="dot blocked"></i>Cleaning</span>
+        <span><i class="dot clear"></i>No ASP</span>
+        <span><i class="dot opens"></i>Ends later</span>
+        <span><i class="dot blocked"></i>ASP</span>
+        <span><i class="dot unknown"></i>Unreadable</span>
       </div>
     </section>
   </main>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <noscript><p style="padding:16px">This dashboard needs JavaScript.</p></noscript>
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script src="logic.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
