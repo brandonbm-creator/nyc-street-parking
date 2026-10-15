@@ -600,7 +600,10 @@ def load_blocks(min_street, max_street, near=None):
         raise DataError("No data yet - run: python3 asp.py fetch")
     blocks, unknown = {}, set()
     with CLEANING_CSV.open(encoding="utf-8") as f:
-        for r in csv.DictReader(f):
+        reader = csv.DictReader(f)
+        if reader.fieldnames != CSV_HEADER:
+            raise DataError("snapshot CSV has an unexpected header; run: python3 asp.py fetch")
+        for r in reader:
             num = int(r["street_no"] or 0)
             lat, lon = csv_latlon(r)
             if near:
@@ -816,7 +819,8 @@ def digest(args):
                 f"| Location | No ASP {window} | Wait & take | ASP ends later | Nearest no-ASP block |", "|---|---|---|---|---|"]
         for p in load_locations():
             here = (p["lat"], p["lon"])
-            near = classify(*load_blocks(0, 0, near=(*here, WALK_METERS)), date, arrive, leave, holidays)
+            near_blocks, near_unknown = load_blocks(0, 0, near=(*here, WALK_METERS))
+            near = classify(near_blocks, date, arrive, leave, holidays, near_unknown)
             best = min(near["clear"], key=lambda x: meters(coords[x[0]], here), default=None)
             if best:
                 (_, on, frm, to, _side) = best[0]

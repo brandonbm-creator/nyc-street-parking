@@ -69,7 +69,7 @@ NYC Open Data sign API ─► asp.py fetch ─► data/street_cleaning.csv + dat
   shows its age), then export, then deploy. A failed test, export, or validation stops the deploy, and the build
   deploys exactly the revision it tested (the snapshot commit is never rebased onto newer code). The workflow
   re-enables its own schedule each run because GitHub disables cron on public repos after 60 days without
-  activity. **`ci.yml`** runs the same tests and a trial export on every pull request.
+  activity. **`ci.yml`** runs the same tests and a trial export on every pull request and non-`main` push.
 - A block face with an ASP sign the parser can't model (no times, or an overnight window) is kept as
   **unknown** (gray, under *Avoid*) rather than silently dropped, so it can never show as "No ASP".
 
@@ -83,7 +83,7 @@ python3 asp.py find --arrive 9:00 --leave 9:10 # an explicit stay is kept exactl
 python3 asp.py digest --date 2026-10-16        # markdown digest for a morning (7:30–12:00 by default)
 python3 asp.py fetch                           # refresh the snapshot by hand (don't commit it; CI owns it)
 
-python3 -m unittest discover -s tests -v       # Python tests (35)
+python3 -m unittest discover -s tests -v       # Python tests (40)
 node --test tests/                             # JavaScript tests (10), same fixtures
 ```
 

@@ -392,6 +392,23 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(len(by["clear"]), 9)
         self.assertTrue(all(st == {"kind": "unknown"} for _, _, st in by["unknown"]))
 
+    def test_digest_runs_on_a_normal_weekday(self):
+        self.good_fetch(40)
+        import contextlib, io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            asp.digest(argparse.Namespace(date=dt.date(2026, 10, 15), arrive="7:30", leave="12:00",
+                                          min_street=61, max_street=110, top=5, out=None))
+        text = buf.getvalue()
+        self.assertIn("ASP today: IN EFFECT", text)
+        self.assertIn("Near our locations", text)
+        self.assertIn("Test HQ", text)
+
+    def test_load_blocks_rejects_old_snapshot_header(self):
+        asp.CLEANING_CSV.write_text(",".join(asp.CSV_HEADER[:-1]) + "\n", encoding="utf-8")
+        with self.assertRaises(asp.DataError):
+            asp.load_blocks(61, 185)
+
     def test_digest_and_find_report_empty_ranges(self):
         self.good_fetch(40)
         base = dict(date=dt.date(2026, 10, 15), min_street=200, max_street=210)
