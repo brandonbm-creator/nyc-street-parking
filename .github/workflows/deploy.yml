@@ -1,0 +1,91 @@
+name: Refresh data and deploy dashboard
+
+# Every build runs the shared test suites first and only deploys a validated data snapshot.
+# A failed sign-data refresh keeps the committed snapshot (the site then shows how old it is);
+# a failed test, export, or validation stops the deploy.
+
+on:
+  schedule:
+    # 10:15 UTC = 6:15 AM EDT / 5:15 AM EST, Mon-Sat (no street cleaning on Sundays)
+    - cron: "15 10 * * 1-6"
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "asp.py"
+      - "tests/**"
+      - "data/asp_suspensions_*.csv"
+      - "data/locations.csv"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # commit the refreshed snapshot
+  pages: write      # deploy to GitHub Pages
+  id-token: write   # required by deploy-pages
+  actions: write    # re-enable this schedule (GitHub disables cron after 60 idle days)
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Test (shared fixtures through Python and JavaScript)
+        run: |
+          python --version && node --version
+          python -m unittest discover -s tests -v
+          node --test tests/logic.test.js
+
+      - name: Refresh sign data (validated; a failure keeps the committed snapshot)
+        id: fetch
+        continue-on-error: true
+        run: python asp.py fetch
+
+      - name: Report a failed refresh
+        if: steps.fetch.outcome == 'failure'
+        run: echo "::warning::Sign data refresh failed; deploying the committed snapshot. See data/snapshot.json for its date."
+
+      - name: Commit the refreshed snapshot
+        if: steps.fetch.outcome == 'success'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/street_cleaning.csv data/snapshot.json
+          if git diff --cached --quiet; then
+            echo "snapshot unchanged"
+          else
+            git commit -m "Data refresh for $(TZ=America/New_York date +%F)"
+            git pull --rebase origin main
+            git push
+          fi
+
+      - name: Build site data (validated)
+        run: python asp.py export
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+      - name: Keep the schedule enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow enable deploy.yml || echo "::warning::could not re-enable the workflow schedule"
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
