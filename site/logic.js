@@ -72,6 +72,7 @@
   }
 
   // ---------------------------------------------------------------- street-cleaning status
+  const has = (obj, key) => !!obj && Object.prototype.hasOwnProperty.call(obj, key);
   const validSeg = (seg) => Array.isArray(seg) && Array.isArray(seg[0]) && Number.isInteger(seg[1]) && Number.isInteger(seg[2]) && seg[2] > seg[1];
 
   /* Classify one block face for a stay from `arrive` until `leave` on `iso`:
@@ -92,7 +93,7 @@
     if (err) throw new Error(err);
     const wd = weekday(iso);
     if (wd === null) throw new Error("Invalid date.");
-    if (holidays && holidays[iso]) return { kind: "clear", swept: false };
+    if (has(holidays, iso)) return { kind: "clear", swept: false };
     const today = scheds.filter((seg) => validSeg(seg) && seg[0].includes(wd));
     const hits = today.filter(([, s, e]) => s < leave && e > arrive);
     if (!hits.length) return { kind: "clear", swept: today.some(([, , e]) => e <= arrive) };
@@ -115,7 +116,7 @@
     if (!isValidDate(iso)) return null;
     for (let i = 0; i < horizon; i++) {
       const d = addDays(iso, i);
-      if (holidays && holidays[d]) continue;
+      if (has(holidays, d)) continue;
       const wd = weekday(d);
       const starts = scheds
         .filter((seg) => validSeg(seg) && seg[0].includes(wd) && (i > 0 || seg[1] >= after))

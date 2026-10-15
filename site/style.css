@@ -101,6 +101,7 @@ body.v-uws .places-only, body.v-places .uws-only { display: none !important; }
 .badge.clear { background: var(--clear-bg); color: var(--clear); }
 .badge.opens { background: var(--opens-bg); color: var(--opens); }
 .badge.blocked { background: var(--blocked-bg); color: var(--blocked); }
+.badge.unknown { background: var(--line); color: var(--muted); }
 .go { font-size: 12px; text-decoration: none; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; white-space: nowrap; flex-shrink: 0; }
 .empty { color: var(--muted); padding: 16px 4px; }
 .more { width: 100%; margin-top: 10px; padding: 10px; border-radius: 10px; border: 1px dashed var(--line); background: none; cursor: pointer; color: var(--muted); }
@@ -113,7 +114,7 @@ body.v-uws .places-only, body.v-places .uws-only { display: none !important; }
   box-shadow: 0 4px 16px rgba(0,0,0,.15); font-size: 12px; max-width: calc(100% - 24px); }
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
 .dot.wait { background: var(--wait); } .dot.clear { background: var(--clear); }
-.dot.opens { background: var(--opens); } .dot.blocked { background: var(--blocked); }
+.dot.opens { background: var(--opens); } .dot.blocked { background: var(--blocked); } .dot.unknown { background: #6b7280; }
 .leaflet-popup-content { font: 13px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; }
 .leaflet-popup-content b { font-size: 14px; }
 

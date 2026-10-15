@@ -242,6 +242,18 @@ def walk_min(m):
     return max(1, round(m * 1.25 / 80))
 
 
+def valid_latlon(lat, lon):
+    """Finite and inside the New York City box; anything else is treated as 'no coordinates'."""
+    return (all(isinstance(v, float) and math.isfinite(v) for v in (lat, lon))
+            and 40.4 < lat < 41.0 and -74.3 < lon < -73.6)
+
+
+def valid_state_plane(x, y):
+    """Finite and inside the EPSG:2263 range NYC signs use (feet)."""
+    return (all(isinstance(v, float) and math.isfinite(v) for v in (x, y))
+            and 900000 < x < 1100000 and 100000 < y < 300000)
+
+
 def state_plane_to_latlon(x_ft, y_ft):
     """NAD83 / New York Long Island (EPSG:2263, US ft) -> (lat, lon). Lambert Conformal Conic inverse."""
     a, f = 6378137.0, 1 / 298.257222101
@@ -286,26 +298,40 @@ def load_locations():
         return [{**r, "lat": float(r["lat"]), "lon": float(r["lon"])} for r in csv.DictReader(f)]
 
 
-def load_suspensions():
-    """{iso date: holiday name} from every data/asp_suspensions_<year>.csv on file."""
-    out = {}
+def read_calendars():
+    """[(year, {iso date: holiday})] from every data/asp_suspensions_<year>.csv.
+
+    A calendar must have at least one row, every date must be valid and in the file's year, and every
+    holiday must be named; otherwise DataError, so a half-made file can never count as coverage.
+    """
+    out = []
     for p in sorted(DATA.glob("asp_suspensions_*.csv")):
+        m = re.fullmatch(r"asp_suspensions_(\d{4})\.csv", p.name)
+        if not m:
+            raise DataError(f"{p.name}: name must be asp_suspensions_<year>.csv")
+        year, days = int(m.group(1)), {}
         with p.open(encoding="utf-8") as f:
             for r in csv.DictReader(f):
-                if not is_valid_date(r.get("date", "")):
-                    raise DataError(f"{p.name}: bad date {r.get('date')!r}")
-                out[r["date"]] = r["holiday"]
+                d, name = (r.get("date") or "").strip(), (r.get("holiday") or "").strip()
+                if not is_valid_date(d) or not d.startswith(f"{year}-"):
+                    raise DataError(f"{p.name}: bad or out-of-year date {d!r}")
+                if not name:
+                    raise DataError(f"{p.name}: {d} has no holiday name")
+                days[d] = name
+        if not days:
+            raise DataError(f"{p.name}: calendar is empty")
+        out.append((year, days))
     return out
 
 
+def load_suspensions():
+    """{iso date: holiday name} across every calendar on file."""
+    return {d: n for _, days in read_calendars() for d, n in days.items()}
+
+
 def suspension_years():
-    """Years whose holiday calendar is on file, from the file names."""
-    years = []
-    for p in DATA.glob("asp_suspensions_*.csv"):
-        m = re.fullmatch(r"asp_suspensions_(\d{4})\.csv", p.name)
-        if m:
-            years.append(int(m.group(1)))
-    return sorted(years)
+    """Years with a complete, validated holiday calendar on file."""
+    return sorted(y for y, _ in read_calendars())
 
 
 def year_covered(years, date):
@@ -366,7 +392,7 @@ def validate_api_rows(rows):
 
 
 CSV_HEADER = ["street_no", "on_street", "from_street", "to_street", "side",
-              "days", "start", "end", "sign_count", "order_numbers", "lat", "lon", "scope"]
+              "days", "start", "end", "sign_count", "order_numbers", "lat", "lon", "scope", "unknown"]
 
 
 def build_schedules(rows, min_street, max_street, places):
@@ -378,26 +404,34 @@ def build_schedules(rows, min_street, max_street, places):
     groups, skipped = defaultdict(lambda: {"signs": 0, "orders": set()}), 0
     coords = defaultdict(list)  # block face -> [(x, y), ...] for a map pin
     in_west = {}                # block face -> inside the West Side street range?
+    unknown = defaultdict(set)  # block face -> order numbers of sanitation signs we could not read
     for r in rows:
         on, frm, to = norm(r.get("on_street")), norm(r.get("from_street")), norm(r.get("to_street"))
         num, town = locate(on, frm, to)
-        sched = parse_schedule(r.get("sign_description", ""))
-        if not sched:
-            skipped += 1
-            continue
-        days, start, end = sched
         face = (num or 0, on, frm, to, r.get("side_of_street", ""))
         in_west[face] = town == "WEST" and min_street <= (num or 0) <= max_street
+        try:
+            x, y = float(r["sign_x_coord"]), float(r["sign_y_coord"])
+            if valid_state_plane(x, y):
+                coords[face].append((x, y))
+        except (KeyError, TypeError, ValueError):
+            pass
+        sched = parse_schedule(r.get("sign_description", ""))
+        if not sched:
+            # An ASP sign we can't model (no time, overnight window): the face is 'unknown', never 'no ASP'.
+            skipped += 1
+            unknown[face].add(r.get("order_number", ""))
+            continue
+        days, start, end = sched
         key = (*face, fmt_days(days), fmt_time(start), fmt_time(end))
         groups[key]["signs"] += 1
         groups[key]["orders"].add(r.get("order_number", ""))
-        try:
-            coords[face].append((float(r["sign_x_coord"]), float(r["sign_y_coord"])))
-        except (KeyError, TypeError, ValueError):
-            pass
 
-    latlon = {face: state_plane_to_latlon(sum(x for x, _ in pts) / len(pts), sum(y for _, y in pts) / len(pts))
-              for face, pts in coords.items() if pts}
+    latlon = {}
+    for face, pts in coords.items():
+        lat, lon = state_plane_to_latlon(sum(x for x, _ in pts) / len(pts), sum(y for _, y in pts) / len(pts))
+        if valid_latlon(lat, lon):
+            latlon[face] = (lat, lon)
 
     def scope(face):
         if in_west[face]:
@@ -415,12 +449,24 @@ def build_schedules(rows, min_street, max_street, places):
             continue
         g = groups[key]
         lat, lon = latlon.get(face, ("", ""))
-        out.append([face[0] or "", *key[1:], g["signs"], " ".join(sorted(g["orders"])), lat, lon, sc])
+        out.append([face[0] or "", *key[1:], g["signs"], " ".join(sorted(g["orders"])), lat, lon, sc,
+                    1 if face in unknown else 0])
         faces.add(face)
         if lat == "":
             no_coords.add(face)
-    meta = {"signs": len(rows), "schedules": len(out), "faces": len(faces),
-            "faces_without_coords": len(no_coords), "skipped_signs": skipped}
+    # Faces whose only sanitation signs were unreadable get a schedule-less row so they still show as unknown.
+    for face in sorted(unknown):
+        if face in faces or not scope(face):
+            continue
+        lat, lon = latlon.get(face, ("", ""))
+        out.append([face[0] or "", *face[1:], "", "", "", len(unknown[face]), " ".join(sorted(unknown[face])),
+                    lat, lon, scope(face), 1])
+        faces.add(face)
+        if lat == "":
+            no_coords.add(face)
+    meta = {"signs": len(rows), "schedules": sum(1 for r in out if r[5]), "faces": len(faces),
+            "faces_without_coords": len(no_coords), "faces_unknown": sum(1 for f in faces if f in unknown),
+            "skipped_signs": skipped}
     return out, meta
 
 
@@ -462,6 +508,15 @@ def fetch(args):
 
 # ---------------------------------------------------------------- export
 
+def csv_latlon(r):
+    """(lat, lon) from a snapshot row, or (None, None) when absent or not a usable NYC coordinate."""
+    try:
+        lat, lon = float(r["lat"]), float(r["lon"])
+    except (KeyError, TypeError, ValueError):
+        return None, None
+    return (lat, lon) if valid_latlon(lat, lon) else (None, None)
+
+
 def read_faces():
     """site/data.json block entries from the snapshot. Returns (faces list, schedule count)."""
     if not CLEANING_CSV.exists():
@@ -473,18 +528,27 @@ def read_faces():
             raise DataError("snapshot CSV has an unexpected header")
         for r in reader:
             key = (int(r["street_no"] or 0), r["on_street"], r["from_street"], r["to_street"], r["side"])
+            lat, lon = csv_latlon(r)
             face = faces.setdefault(key, {
                 "n": key[0] or None, "on": pretty(key[1]), "from": pretty(key[2]), "to": pretty(key[3]),
-                "side": key[4], "lat": float(r["lat"]) if r["lat"] else None,
-                "lon": float(r["lon"]) if r["lon"] else None, "s": []})
+                "side": key[4], "lat": lat, "lon": lon, "s": []})
             if r["scope"] == "near":
                 face["near"] = 1  # only shown in location views, not the West Side area views
+            if r["unknown"] == "1":
+                face["u"] = 1     # an ASP sign on this face could not be read: never report it as 'no ASP'
+            if not r["days"]:
+                if r["unknown"] != "1":
+                    raise DataError(f"snapshot row without a schedule on {key[1]}")
+                continue
             days = sorted(DAY_ALIASES[d.upper()] for d in r["days"].split("/"))
             start, end = parse_hhmm(r["start"]), parse_hhmm(r["end"])
             if end <= start:
                 raise DataError(f"snapshot has an overnight window on {key[1]} ({r['start']}-{r['end']})")
             face["s"].append([days, start, end])
             n += 1
+    for b in faces.values():
+        if not b["s"] and not b.get("u"):
+            raise DataError(f"snapshot face without schedules: {b['on']}")
     return sorted(faces.values(), key=lambda b: (b["n"] or 9999, b["on"], b["side"])), n
 
 
@@ -503,7 +567,8 @@ def build_site_data(now=None):
         "holidays": load_suspensions(),
         "places": [{k: p[k] for k in ("name", "kind", "type", "address", "lat", "lon")} for p in load_locations()],
         "stats": {"schedules": n, "faces": len(faces),
-                  "faces_without_coords": sum(1 for b in faces if b["lat"] is None)},
+                  "faces_without_coords": sum(1 for b in faces if b["lat"] is None),
+                  "faces_unknown": sum(1 for b in faces if b.get("u"))},
         "blocks": faces,
     }, n
 
@@ -515,7 +580,7 @@ def export(args):
             raise DataError(f"snapshot has only {n} schedules (floor {args.min_schedules}); re-run with --force to accept")
         if not out["holiday_years"]:
             raise DataError("no data/asp_suspensions_<year>.csv on file")
-        write_atomic(SITE_DATA, json.dumps(out, separators=(",", ":"), ensure_ascii=False))
+        write_atomic(SITE_DATA, json.dumps(out, separators=(",", ":"), ensure_ascii=False, allow_nan=False))
     except (DataError, OSError, ValueError) as e:
         sys.exit(f"export failed: {e}")
     print(f"Wrote {out['stats']['faces']} block faces ({n} schedules) to {rel(SITE_DATA)}; "
@@ -529,28 +594,38 @@ def load_blocks(min_street, max_street, near=None):
 
     Default: West Side blocks in [min_street, max_street].
     near=(lat, lon, radius_m): every block face (any scope) within the radius instead.
+    Returns (blocks, unknown): `unknown` is the set of keys with an unreadable ASP sign.
     """
     if not CLEANING_CSV.exists():
         raise DataError("No data yet - run: python3 asp.py fetch")
-    blocks = defaultdict(list)
+    blocks, unknown = {}, set()
     with CLEANING_CSV.open(encoding="utf-8") as f:
         for r in csv.DictReader(f):
             num = int(r["street_no"] or 0)
+            lat, lon = csv_latlon(r)
             if near:
-                if not r["lat"] or meters((float(r["lat"]), float(r["lon"])), near[:2]) > near[2]:
+                if lat is None or meters((lat, lon), near[:2]) > near[2]:
                     continue
             elif r["scope"] != "west" or not (min_street <= num <= max_street):
                 continue
-            days = {DAY_ALIASES[d.upper()] for d in r["days"].split("/")}
             key = (num, r["on_street"], r["from_street"], r["to_street"], r["side"])
-            blocks[key].append((days, parse_hhmm(r["start"]), parse_hhmm(r["end"])))
-    return blocks
+            blocks.setdefault(key, [])
+            if r["unknown"] == "1":
+                unknown.add(key)
+            if r["days"]:
+                days = {DAY_ALIASES[d.upper()] for d in r["days"].split("/")}
+                blocks[key].append((days, parse_hhmm(r["start"]), parse_hhmm(r["end"])))
+    return blocks, unknown
 
 
 def load_coords():
+    out = {}
     with CLEANING_CSV.open(encoding="utf-8") as f:
-        return {(int(r["street_no"] or 0), r["on_street"], r["from_street"], r["to_street"], r["side"]):
-                (float(r["lat"]), float(r["lon"])) for r in csv.DictReader(f) if r["lat"]}
+        for r in csv.DictReader(f):
+            lat, lon = csv_latlon(r)
+            if lat is not None:
+                out[(int(r["street_no"] or 0), r["on_street"], r["from_street"], r["to_street"], r["side"])] = (lat, lon)
+    return out
 
 
 def status(scheds, date, arrive, leave, holidays, max_wait=MAX_WAIT):
@@ -621,16 +696,20 @@ def map_url(on, frm, to):
     return "https://www.google.com/maps/search/?api=1&query=" + urllib.parse.quote_plus(q)
 
 
-def classify(blocks, date, arrive, leave, holidays):
-    """-> {"clear": [...], "wait": [...], "opens": [...], "blocked": [...]} of (key, scheds, status)."""
-    out = {"clear": [], "wait": [], "opens": [], "blocked": []}
+def classify(blocks, date, arrive, leave, holidays, unknown=frozenset()):
+    """-> {"clear", "wait", "opens", "blocked", "unknown": [...]} of (key, scheds, status).
+
+    Faces in `unknown` (an ASP sign we could not read) are reported as unknown, never as no ASP.
+    """
+    out = {"clear": [], "wait": [], "opens": [], "blocked": [], "unknown": []}
     for key, scheds in blocks.items():
-        st = status(scheds, date, arrive, leave, holidays)
+        st = {"kind": "unknown"} if key in unknown else status(scheds, date, arrive, leave, holidays)
         out[st["kind"]].append((key, scheds, st))
     out["clear"].sort(key=lambda x: (x[0][0], not x[2]["swept"]))
     out["wait"].sort(key=lambda x: (x[2]["wait"], x[0][0]))
     out["opens"].sort(key=lambda x: (x[2]["free"], x[0][0]))
     out["blocked"].sort(key=lambda x: x[0][0])
+    out["unknown"].sort(key=lambda x: x[0][0])
     return out
 
 
@@ -674,9 +753,11 @@ def digest(args):
     if err:
         sys.exit(err)
     holidays = load_suspensions()
-    blocks = load_blocks(args.min_street, args.max_street)
-    by = classify(blocks, date, arrive, leave, holidays)
-    clear, wait, opens, blocked = by["clear"], by["wait"], by["opens"], by["blocked"]
+    blocks, unknown = load_blocks(args.min_street, args.max_street)
+    if not blocks:
+        sys.exit(f"No block faces in range W {args.min_street}-{args.max_street} St.")
+    by = classify(blocks, date, arrive, leave, holidays, unknown)
+    clear, wait, opens, blocked, unk = by["clear"], by["wait"], by["opens"], by["blocked"], by["unknown"]
     window = f"{fmt_time(arrive)}–{fmt_time(leave)}"
     suspended = date.isoformat() in holidays
 
@@ -684,11 +765,12 @@ def digest(args):
     if suspended:
         out.append(f"**ASP today: SUSPENDED ({holidays[date.isoformat()]})** — "
                    "street cleaning rules don't apply. Meters and other signs may still apply.")
-    elif not (wait or opens or blocked):
-        out.append(f"**ASP today: none scheduled** — no block has street cleaning {window}.")
+    elif not (wait or opens or blocked or unk):
+        out.append(f"**ASP today: none scheduled** — none of the {len(blocks)} block faces has street cleaning {window}.")
     else:
         out.append(f"**ASP today: IN EFFECT** · {len(clear)} of {len(blocks)} block faces have no ASP "
-                   f"{window} · W {ordinal(args.min_street)}–{ordinal(args.max_street)} St")
+                   f"{window} · W {ordinal(args.min_street)}–{ordinal(args.max_street)} St"
+                   + (f" · {len(unk)} with an unreadable ASP sign (check posted signs)" if unk else ""))
     out += ["", f"> Toll-free from 61st St up (60th is in the toll zone). {SIGNS_NOTE}", ""]
     for line in coverage_warnings(date, now):
         out.append(f"> ⚠️ {line}")
@@ -704,7 +786,7 @@ def digest(args):
                        f"{next_cleaning(scheds, date, st['end'], holidays)} |")
         out.append("")
 
-    if wait or opens or blocked:
+    if wait or opens or blocked or unk:
         out += [f"## ✅ No ASP {window}, closest to 61st", "",
                 "| St | Block | Side | Next ASP |", "|---|---|---|---|"]
         for (num, on, frm, to, side), scheds, st in clear[:args.top]:
@@ -734,7 +816,7 @@ def digest(args):
                 f"| Location | No ASP {window} | Wait & take | ASP ends later | Nearest no-ASP block |", "|---|---|---|---|---|"]
         for p in load_locations():
             here = (p["lat"], p["lon"])
-            near = classify(load_blocks(0, 0, near=(*here, WALK_METERS)), date, arrive, leave, holidays)
+            near = classify(*load_blocks(0, 0, near=(*here, WALK_METERS)), date, arrive, leave, holidays)
             best = min(near["clear"], key=lambda x: meters(coords[x[0]], here), default=None)
             if best:
                 (_, on, frm, to, _side) = best[0]
@@ -746,10 +828,10 @@ def digest(args):
                        f"{len(near['opens'])} | {nearest} |")
 
     tomorrow = date + dt.timedelta(days=1)
-    t = classify(blocks, tomorrow, arrive, leave, holidays)
+    t = classify(blocks, tomorrow, arrive, leave, holidays, unknown)
     if tomorrow.isoformat() in holidays:
         t_line = f"SUSPENDED ({holidays[tomorrow.isoformat()]})"
-    elif not (t["wait"] or t["opens"] or t["blocked"]):
+    elif not (t["wait"] or t["opens"] or t["blocked"] or t["unknown"]):
         t_line = "no street cleaning"
     else:
         t_line = f"in effect — {len(t['clear'])} of {len(blocks)} block faces have no ASP {window}"
@@ -795,10 +877,10 @@ def find(args):
             here, label = (matches[0]["lat"], matches[0]["lon"]), matches[0]["name"]
         if args.radius <= 0:
             sys.exit("--radius must be a positive number of meters")
-        blocks = load_blocks(0, 0, near=(*here, args.radius))
+        blocks, unknown = load_blocks(0, 0, near=(*here, args.radius))
         where = f"within {args.radius} m of {label}"
     else:
-        blocks = load_blocks(args.min_street, args.max_street)
+        blocks, unknown = load_blocks(args.min_street, args.max_street)
     print(f"{date:%A %b %d, %Y}  |  park {fmt_time(arrive)}-{fmt_time(leave)}  |  {where}")
     for line in coverage_warnings(date, now):
         print(f"WARNING: {line}")
@@ -809,8 +891,8 @@ def find(args):
         print("No block faces in range.")
         return
 
-    by = classify(blocks, date, arrive, leave, holidays)
-    clear, wait, opens, blocked = by["clear"], by["wait"], by["opens"], by["blocked"]
+    by = classify(blocks, date, arrive, leave, holidays, unknown)
+    clear, wait, opens, blocked, unk = by["clear"], by["wait"], by["opens"], by["blocked"], by["unknown"]
     coords = load_coords()
     dist = lambda key: meters(coords[key], here) if here and key in coords else float("inf")
     if here:
@@ -818,7 +900,7 @@ def find(args):
         wait.sort(key=lambda x: x[2]["wait"] + walk_min(dist(x[0])))  # wait + walk, shortest first
     first_col = lambda key: f"{walk_min(dist(key))}m" if here else key[0]
     print(f"{len(wait)} wait & take, {len(clear)} no ASP, {len(opens)} ASP ends later, "
-          f"{len(blocked)} ASP during your stay.\n")
+          f"{len(blocked)} ASP during your stay" + (f", {len(unk)} with an unreadable ASP sign (avoid)" if unk else "") + ".\n")
 
     if wait:
         print("WAIT & TAKE - suggested arrival is the halfway mark of the cleaning window, when cars start moving back in.")

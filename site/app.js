@@ -12,13 +12,13 @@ const AREAS = [
   [111, 135, "Morningside / Harlem", "111–135"],
   [136, 185, "Hamilton Hts / Wash Hts", "136–185"],
 ];
-const KINDS = ["wait", "clear", "opens", "blocked"];
-const COLORS = { wait: "#2563eb", clear: "#16a34a", opens: "#f59e0b", blocked: "#dc2626" };
+const KINDS = ["wait", "clear", "opens", "blocked", "unknown"];
+const COLORS = { wait: "#2563eb", clear: "#16a34a", opens: "#f59e0b", blocked: "#dc2626", unknown: "#6b7280" };
 const HINTS = {
   wait: "Suggested arrival is the halfway mark of the cleaning window, when cars typically start moving back in on these competitive blocks. The posted restriction still runs to the ASP end time (NYC311 KA-01011). Vacancy isn't measured.",
   clear: "No street cleaning during your stay. Meters, No Standing, hydrants and other signs still apply; vacancy isn't measured.",
   opens: "ASP ends before you leave, but the halfway mark is too far off or already passed (then it's a competitive move-in until the end time).",
-  blocked: "ASP runs past when you'd leave. Avoid.",
+  blocked: "ASP runs past when you'd leave, or an ASP sign on the block couldn't be read (gray). Avoid.",
 };
 const PAGE = 40;
 const ME = -1;            // state.place value for "near my current location"
@@ -75,7 +75,8 @@ function daysSince(iso) {
 // ---------------------------------------------------------------- places and status
 const mePlace = () => state.here && { name: "You", kind: "Your current location", type: "me", ...state.here };
 const place = () => (state.place === ME ? mePlace() : DATA.places[state.place]);
-const statusOf = (b) => LG.statusOf(b.s, state.date, state.arrive, state.leave, DATA.holidays, DATA.max_wait);
+// A face with an ASP sign we couldn't read (b.u) is "unknown": never shown as no ASP.
+const statusOf = (b) => (b.u ? { kind: "unknown" } : LG.statusOf(b.s, state.date, state.arrive, state.leave, DATA.holidays, DATA.max_wait));
 const nextLabel = (b, after) => LG.nextCleaningLabel(LG.nextCleaningAt(b.s, state.date, after, DATA.holidays), state.date);
 const schedText = (b) => b.s.map(([d, s, e]) => `${d.map((x) => DAY[x]).join("/")} ${fmtTime(s)}–${fmtTime(e)}`).join("; ");
 const sideText = (s) => ({ N: "north", S: "south", E: "east", W: "west" }[s] || s) + " side";
@@ -107,7 +108,7 @@ function compute() {
 }
 
 function counts(list) {
-  const c = { wait: 0, clear: 0, opens: 0, blocked: 0 };
+  const c = { wait: 0, clear: 0, opens: 0, blocked: 0, unknown: 0 };
   list.forEach((x) => c[x.st.kind]++);
   return c;
 }
@@ -129,11 +130,11 @@ function renderStatus() {
   if (!rows.length) return set("err", "No blocks in range", `No block faces with map coordinates${scope}. Try a larger radius or another location.`);
   const hol = DATA.holidays[iso];
   if (hol) return set("off", "ASP suspended", `${fmtDate(iso)} · ${esc(hol)}. Street cleaning rules don't apply; meters and other signs may.`);
-  if (!c.wait && !c.opens && !c.blocked) return set("off", "No ASP", `${fmtDate(iso)} · none of the ${rows.length} block faces${scope} has street cleaning ${win}.`);
+  if (!c.wait && !c.opens && !c.blocked && !c.unknown) return set("off", "No ASP", `${fmtDate(iso)} · none of the ${rows.length} block faces${scope} has street cleaning ${win}.`);
   const best = rows.filter((r) => r.st.kind === "wait").sort((a, b) => a.st.wait - b.st.wait)[0];
   el.className = "status on";
   el.innerHTML = `<div class="big">ASP in effect</div>
-    <div class="small">${fmtDate(iso)} · <b>${c.clear}</b> of ${rows.length} block faces have no ASP ${win}${scope}</div>
+    <div class="small">${fmtDate(iso)} · <b>${c.clear}</b> of ${rows.length} block faces have no ASP ${win}${scope}${c.unknown ? ` · ${c.unknown} with an unreadable ASP sign` : ""}</div>
     ${c.wait ? `<div class="prime">⭐ ${c.wait} wait-&amp;-take spot${c.wait > 1 ? "s" : ""} · suggested arrival ${fmtTime(best.st.at)}${best.st.wait ? ` (${best.st.wait} min)` : " (now)"} · ASP ends ${fmtTime(best.st.end)}</div>` : ""}`;
 }
 
@@ -192,7 +193,7 @@ function renderTiles() {
 }
 
 function visibleRows() {
-  let r = rows.filter((x) => x.st.kind === state.tab);
+  let r = rows.filter((x) => (state.tab === "blocked" ? x.st.kind === "blocked" || x.st.kind === "unknown" : x.st.kind === state.tab));
   if (state.view === "uws" && state.area !== null) {
     const [lo, hi] = AREAS[state.area];
     r = r.filter((x) => x.b.n >= lo && x.b.n <= hi);
@@ -208,6 +209,7 @@ function badge(st) {
   if (st.kind === "wait") return `<span class="badge wait">⭐ arrive by ${fmtTime(st.at)}${st.wait ? ` (${st.wait} min)` : " (now)"} · ASP ends ${fmtTime(st.end)}</span>`;
   if (st.kind === "clear") return `<span class="badge clear">${st.swept ? "swept earlier · no ASP" : "no ASP"}</span>`;
   if (st.kind === "opens") return `<span class="badge opens">${st.since ? `move-in since ${fmtTime(st.since)} · competitive · ` : ""}ASP ends ${fmtTime(st.free)}</span>`;
+  if (st.kind === "unknown") return `<span class="badge unknown">⚠ unreadable ASP sign · check the posted signs</span>`;
   return `<span class="badge blocked">ASP until ${fmtTime(st.until)}</span>`;
 }
 
@@ -227,7 +229,7 @@ function renderList() {
       <div class="st">${d != null ? `${walkMin(d)}<div class="meta">min</div>` : b.n}</div>
       <div class="body">
         <div class="blk">${esc(b.on)}</div>
-        <div class="meta">${esc(b.from)} → ${esc(b.to)} · ${sideText(b.side)} · next ASP ${nextLabel(b, st.kind === "wait" ? st.end : state.leave)}${b.lat == null ? " · no map pin" : ""}</div>
+        <div class="meta">${esc(b.from)} → ${esc(b.to)} · ${sideText(b.side)}${st.kind === "unknown" ? "" : ` · next ASP ${nextLabel(b, st.kind === "wait" ? st.end : state.leave)}`}${b.lat == null ? " · no map pin" : ""}</div>
         <div class="tags">${badge(st)}</div>
       </div>
       <a class="go" href="${dirUrl(b)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Go ↗</a>
@@ -241,11 +243,12 @@ function popupHtml(b, st) {
     clear: "No ASP during your stay",
     opens: st.since ? `Move-in started ${fmtTime(st.since)}; competitive until ASP ends ${fmtTime(st.free)}` : `ASP ends ${fmtTime(st.free)}`,
     blocked: `ASP until ${fmtTime(st.until)}`,
+    unknown: "⚠ An ASP sign on this block couldn't be read: check the posted signs",
   }[st.kind];
   return `<b>${esc(b.on)}</b><br>${esc(b.from)} → ${esc(b.to)} · ${sideText(b.side)}<br>
     <span style="color:${COLORS[st.kind]};font-weight:600">${label}</span><br>
-    <span style="color:#64748b">${schedText(b)}</span><br>
-    Next ASP: ${nextLabel(b, st.kind === "wait" ? st.end : state.leave)}<br>
+    <span style="color:#64748b">${schedText(b) || "schedule unreadable"}</span><br>
+    ${st.kind === "unknown" ? "" : `Next ASP: ${nextLabel(b, st.kind === "wait" ? st.end : state.leave)}<br>`}
     <a href="${dirUrl(b)}" target="_blank" rel="noopener">Directions ↗</a>`;
 }
 
@@ -269,7 +272,7 @@ function renderMap() {
     } else {
       m.st = st;
       m.marker.setStyle(markerStyle(st));
-      if (m.marker.isPopupOpen()) m.marker.setPopupContent(popupHtml(b, st));
+      if (m.marker.isPopupOpen()) m.marker.getPopup().update(); // re-runs the content callback; keeps it dynamic
     }
     if (st.kind === "wait") m.marker.bringToFront();
   }
@@ -392,7 +395,9 @@ function selectPlace(i) {
 function save() {
   const { arrive, leave, max, view, radius } = state;
   const p = state.place === ME ? 0 : state.place; // don't persist "me": location goes stale
-  localStorage.setItem("uws-parking", JSON.stringify({ arrive, leave, max, view, place: p, radius }));
+  try {
+    localStorage.setItem("uws-parking", JSON.stringify({ arrive, leave, max, view, place: p, radius }));
+  } catch (e) { /* private mode or full storage: the UI must still update */ }
 }
 
 const inRange = (v, lo, hi) => Number.isInteger(v) && v >= lo && v <= hi;
@@ -460,7 +465,17 @@ async function init() {
   DATA.stats = DATA.stats || { faces: DATA.blocks.length, faces_without_coords: DATA.blocks.filter((b) => b.lat == null).length };
   DATA.max_wait = Number.isInteger(DATA.max_wait) ? DATA.max_wait : LG.MAX_WAIT;
   DATA.stale_days = Number.isInteger(DATA.stale_days) ? DATA.stale_days : 7;
-  DATA.blocks.forEach((b, i) => { b.i = i; });
+  // Trust nothing in a block: drop malformed segments; a face left without any usable segment is "unknown".
+  const validSeg = (seg) => Array.isArray(seg) && Array.isArray(seg[0]) && seg[0].length > 0
+    && seg[0].every((d) => Number.isInteger(d) && d >= 0 && d <= 6)
+    && Number.isInteger(seg[1]) && Number.isInteger(seg[2]) && seg[1] >= 0 && seg[2] < 1440 && seg[2] > seg[1];
+  const finite = (v) => typeof v === "number" && Number.isFinite(v);
+  DATA.blocks.forEach((b, i) => {
+    b.i = i;
+    b.s = Array.isArray(b.s) ? b.s.filter(validSeg) : [];
+    if (!b.s.length) b.u = 1;
+    if (!(finite(b.lat) && finite(b.lon))) { b.lat = null; b.lon = null; }
+  });
 
   restore();
   const wantMe = applyQuery(new URLSearchParams(location.search));

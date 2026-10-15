@@ -64,8 +64,9 @@ jobs:
             echo "snapshot unchanged"
           else
             git commit -m "Data refresh for $(TZ=America/New_York date +%F)"
-            git pull --rebase origin main
-            git push
+            # No rebase: this build was tested at ${{ github.sha }} and must deploy exactly that code.
+            # If main moved meanwhile, the push is skipped and the next run refreshes and commits again.
+            git push || echo "::warning::main moved during this run; the snapshot commit was not pushed (the next run retries)"
           fi
 
       - name: Build site data (validated)

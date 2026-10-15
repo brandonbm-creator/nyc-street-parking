@@ -1,0 +1,31 @@
+name: CI
+
+# Pull requests and non-main branches: run both test suites and a trial export of the committed
+# snapshot. Nothing is deployed here; deploy.yml (main only) does that after the same tests.
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Test (shared fixtures through Python and JavaScript)
+        run: |
+          python --version && node --version
+          python -m unittest discover -s tests -v
+          node --test tests/logic.test.js
+
+      - name: Trial export of the committed snapshot
+        run: python asp.py export

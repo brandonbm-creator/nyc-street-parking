@@ -236,6 +236,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(meta["schedules"], 40)
         self.assertEqual(meta["faces"], 40)
         self.assertEqual(meta["signs"], 40)
+        self.assertEqual(meta["faces_unknown"], 0)
         self.assertIn("source_fetched_at", meta)
         self.assertEqual([p.name for p in self.d.glob("**/*.tmp")], [])
 
@@ -285,8 +286,11 @@ class PipelineTests(unittest.TestCase):
         rows.append({**sign(11), "on_street": "EAST 85 STREET", "from_street": "3 AVENUE", "to_street": "2 AVENUE"})
         csv_rows, meta = asp.build_schedules(rows, 61, 185, asp.load_locations())
         self.assertEqual(meta["skipped_signs"], 1)
-        self.assertEqual(meta["schedules"], 10)  # the East Side row is out of scope and far from Test HQ
-        self.assertTrue(all(r[-1] == "west" for r in csv_rows))
+        self.assertEqual(meta["schedules"], 10)   # the East Side row is out of scope and far from Test HQ
+        self.assertEqual(meta["faces"], 11)       # the unreadable sign's face is kept as unknown
+        self.assertEqual(meta["faces_unknown"], 1)
+        self.assertTrue(all(r[-2] == "west" for r in csv_rows))
+        self.assertEqual([r[-1] for r in csv_rows].count(1), 1)
 
     def test_export_builds_site_data(self):
         self.good_fetch(40)
@@ -299,7 +303,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(out["holiday_years"], [2026])
         self.assertEqual(out["holidays"]["2026-11-26"], "Thanksgiving Day")
         self.assertEqual(out["max_wait"], asp.MAX_WAIT)
-        self.assertEqual(out["stats"], {"schedules": 40, "faces": 40, "faces_without_coords": 0})
+        self.assertEqual(out["stats"], {"schedules": 40, "faces": 40, "faces_without_coords": 0, "faces_unknown": 0})
         self.assertEqual(len(out["places"]), 1)
         b = out["blocks"][0]
         self.assertEqual(set(b), {"n", "on", "from", "to", "side", "lat", "lon", "s"})
@@ -319,15 +323,86 @@ class PipelineTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             asp.export(argparse.Namespace(min_schedules=5, force=False))
 
-    def test_load_suspensions_rejects_bad_dates(self):
-        (self.d / "data" / "asp_suspensions_2027.csv").write_text("date,holiday\n2027-02-30,Nope\n", encoding="utf-8")
-        with self.assertRaises(asp.DataError):
-            asp.load_suspensions()
+    def test_calendar_validation(self):
+        cal = self.d / "data" / "asp_suspensions_2027.csv"
+        for bad in ("date,holiday\n2027-02-30,Nope\n",       # impossible date
+                    "date,holiday\n2026-01-01,Wrong year\n",  # not the file's year
+                    "date,holiday\n2027-01-01,\n",            # unnamed holiday
+                    "date,holiday\n"):                        # header only: never counts as coverage
+            cal.write_text(bad, encoding="utf-8")
+            with self.subTest(bad):
+                with self.assertRaises(asp.DataError):
+                    asp.load_suspensions()
+                with self.assertRaises(asp.DataError):
+                    asp.suspension_years()
+                self.good_fetch(40)
+                with self.assertRaises(SystemExit):
+                    asp.export(argparse.Namespace(min_schedules=5, force=False))
+        cal.write_text("date,holiday\n2027-01-01,New Year's Day\n", encoding="utf-8")
+        self.assertEqual(asp.suspension_years(), [2026, 2027])
+        self.assertEqual(asp.load_suspensions()["2027-01-01"], "New Year's Day")
 
     def test_suspension_years_and_coverage(self):
         self.assertEqual(asp.suspension_years(), [2026])
         self.assertTrue(asp.year_covered([2026], dt.date(2026, 12, 31)))
         self.assertFalse(asp.year_covered([2026], dt.date(2027, 1, 1)))
+
+    def test_bad_coordinates_become_missing_and_json_stays_valid(self):
+        rows = [sign(i) for i in range(10)]
+        rows[0]["sign_x_coord"], rows[0]["sign_y_coord"] = "NaN", "NaN"
+        rows[1]["sign_x_coord"], rows[1]["sign_y_coord"] = "1e9", "1e9"
+        rows[2]["sign_x_coord"] = "not a number"
+        with mock.patch.object(asp, "fetch_rows", return_value=rows):
+            asp.fetch(self.fetch_args())
+        meta = json.loads(asp.SNAPSHOT_JSON.read_text(encoding="utf-8"))
+        self.assertEqual(meta["faces"], 10)
+        self.assertEqual(meta["faces_without_coords"], 3)
+        text = asp.CLEANING_CSV.read_text(encoding="utf-8").lower()
+        self.assertNotIn("nan", text.split("\n", 1)[1])
+        asp.export(argparse.Namespace(min_schedules=5, force=False))
+        out = json.loads(asp.SITE_DATA.read_text(encoding="utf-8"))  # would fail on a bare NaN token
+        self.assertEqual(sum(1 for b in out["blocks"] if b["lat"] is None), 3)
+        self.assertTrue(all(b["lat"] is None or 40.4 < b["lat"] < 41.0 for b in out["blocks"]))
+        # a snapshot row with a corrupt coordinate is read as 'no coordinates', not crashed on
+        self.assertEqual(asp.csv_latlon({"lat": "nan", "lon": "-73.95"}), (None, None))
+        self.assertEqual(asp.csv_latlon({"lat": "40.81", "lon": "-73.95"}), (40.81, -73.95))
+
+    def test_unreadable_sign_marks_face_unknown_never_no_asp(self):
+        unreadable = "NO PARKING (SANITATION BROOM SYMBOL) <-> (SUPERSEDES SP-864C)"
+        rows = [sign(i) for i in range(10)]
+        rows.append(sign(10, unreadable))                           # face 66N: only an unreadable sign
+        rows.append({**sign(2), "sign_description": unreadable})    # face 62N: one readable + one unreadable
+        with mock.patch.object(asp, "fetch_rows", return_value=rows):
+            asp.fetch(self.fetch_args())
+        meta = json.loads(asp.SNAPSHOT_JSON.read_text(encoding="utf-8"))
+        self.assertEqual((meta["faces"], meta["schedules"], meta["faces_unknown"], meta["skipped_signs"]), (11, 10, 2, 2))
+        asp.export(argparse.Namespace(min_schedules=5, force=False))
+        out = json.loads(asp.SITE_DATA.read_text(encoding="utf-8"))
+        by_name = {(b["on"], b["side"]): b for b in out["blocks"]}
+        self.assertEqual(by_name[("W 66th St", "N")]["u"], 1)
+        self.assertEqual(by_name[("W 66th St", "N")]["s"], [])
+        self.assertEqual(by_name[("W 62nd St", "N")]["u"], 1)
+        self.assertEqual(len(by_name[("W 62nd St", "N")]["s"]), 1)
+        self.assertNotIn("u", by_name[("W 61st St", "N")])
+        self.assertEqual(out["stats"]["faces_unknown"], 2)
+        blocks, unknown = asp.load_blocks(61, 185)
+        self.assertEqual(len(unknown), 2)
+        by = asp.classify(blocks, dt.date(2026, 10, 18), 540, 720, {}, unknown)  # Sunday: no cleaning anywhere
+        self.assertEqual(len(by["unknown"]), 2)
+        self.assertEqual(len(by["clear"]), 9)
+        self.assertTrue(all(st == {"kind": "unknown"} for _, _, st in by["unknown"]))
+
+    def test_digest_and_find_report_empty_ranges(self):
+        self.good_fetch(40)
+        base = dict(date=dt.date(2026, 10, 15), min_street=200, max_street=210)
+        with self.assertRaises(SystemExit) as cm:
+            asp.digest(argparse.Namespace(**base, arrive="7:30", leave="12:00", top=5, out=None))
+        self.assertIn("No block faces in range", str(cm.exception))
+        import contextlib, io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            asp.find(argparse.Namespace(**base, arrive="7:30", leave=None, limit=5, near=None, radius=400))
+        self.assertIn("No block faces in range", buf.getvalue())
 
     def test_data_age_and_coverage_warnings(self):
         self.good_fetch(40)
@@ -346,9 +421,10 @@ class PipelineTests(unittest.TestCase):
         self.good_fetch(40)
         coords = asp.load_coords()
         here = next(iter(coords.values()))
-        near = asp.load_blocks(0, 0, near=(*here, 50))
+        near, unknown = asp.load_blocks(0, 0, near=(*here, 50))
         self.assertGreaterEqual(len(near), 1)
-        by = asp.classify(near, dt.date(2026, 10, 15), 540, 720, {})  # Thu, arrive at 9:00 during 9-10:30
+        self.assertEqual(unknown, set())
+        by = asp.classify(near, dt.date(2026, 10, 15), 540, 720, {}, unknown)  # Thu, arrive at 9:00 during 9-10:30
         self.assertEqual(len(by["wait"]), len(near))
         self.assertEqual(by["wait"][0][2], {"kind": "wait", "at": 585, "start": 540, "end": 630, "wait": 45})
 

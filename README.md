@@ -64,10 +64,14 @@ NYC Open Data sign API ─► asp.py fetch ─► data/street_cleaning.csv + dat
   `source_fetched_at` (when the signs were fetched) separate from `built_at` (when the site was built).
 - **`site/logic.js`** is the pure street-cleaning logic (status, next cleaning, time/date validation). It mirrors
   `asp.py`; **`tests/fixtures/cases.json`** is run through both, so the browser and the CLI can't drift apart.
-- **`.github/workflows/deploy.yml`** runs Monday–Saturday at ~6:15 AM ET and on pushes to `main`: tests first,
-  then a validated refresh (a failed refresh keeps the committed snapshot and the site shows its age), then
-  export, then deploy. A failed test, export, or validation stops the deploy. The workflow re-enables its own
-  schedule each run because GitHub disables cron on public repos after 60 days without activity.
+- **`.github/workflows/deploy.yml`** runs Monday–Saturday at 10:15 UTC (6:15 AM EDT, 5:15 AM EST) and on pushes
+  to `main`: tests first, then a validated refresh (a failed refresh keeps the committed snapshot and the site
+  shows its age), then export, then deploy. A failed test, export, or validation stops the deploy, and the build
+  deploys exactly the revision it tested (the snapshot commit is never rebased onto newer code). The workflow
+  re-enables its own schedule each run because GitHub disables cron on public repos after 60 days without
+  activity. **`ci.yml`** runs the same tests and a trial export on every pull request.
+- A block face with an ASP sign the parser can't model (no times, or an overnight window) is kept as
+  **unknown** (gray, under *Avoid*) rather than silently dropped, so it can never show as "No ASP".
 
 ## Local use (Python 3.10+, Node 20+ for the JS tests, no packages)
 
@@ -96,6 +100,7 @@ node --test tests/                             # JavaScript tests (10), same fix
 | `data/locations.csv` | Our stores and sites: `name,kind,type,address,lat,lon`; `type` sets the pin color (subway, nonprofit, development, site) |
 | `data/asp_suspensions_<year>.csv` | Holiday suspensions per year, verified against the NYC DOT table |
 | `tests/` | `test_asp.py`, `logic.test.js`, `fixtures/cases.json` |
+| `.github/workflows/deploy.yml`, `ci.yml` | Daily refresh + deploy (main only); tests on every pull request |
 | `data/my_spots.csv` | Your own parking log; git-ignored |
 
 ## Operations for the year
@@ -109,10 +114,13 @@ The 2026 file was checked date-by-date against the DOT table (42 dates).
 
 **Sign data.** The daily refresh commits a new snapshot only when it passes validation. If the data is more than
 7 days old the site says so; look at the repo's **Actions** tab for the failing step. If the city legitimately
-removed many signs, run `python3 asp.py fetch --force` locally, check the diff, and commit it.
+removed many signs, run `python3 asp.py fetch --force` locally (`--force` skips the shrink-versus-previous check;
+the 1,500-schedule floor still applies unless you lower `--min-schedules`), check the diff, and commit it.
 
-**Schedule.** If the daily run stops appearing in Actions, open the workflow and press **Run workflow**; the run
-re-enables the schedule.
+**Schedule.** If the daily run stops appearing in Actions, GitHub has disabled the schedule: open **Actions →
+Refresh data and deploy dashboard**, press **Enable workflow**, then **Run workflow**
+([GitHub docs](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/disable-and-enable-workflows)).
+Each successful run re-enables the schedule itself.
 
 **Locations.** Edit `data/locations.csv` (lat/lon from
 [NYC GeoSearch](https://geosearch.planninglabs.nyc/v2/search?text=6%20Hancock%20Place%20Manhattan)) and push.
