@@ -43,8 +43,14 @@ h1 { font-size: 22px; margin: 0; letter-spacing: -0.02em; }
 }
 .seg button.on, .tabs button.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
 .seg input { flex: 1.2; padding: 6px 8px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); min-width: 0; }
-.row { display: flex; gap: 10px; }
-.row label { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+/* Inputs and the whole-zone button wrap to their own row when the panel is too narrow for them (desktop panel is 420px) */
+#day-seg { flex-wrap: wrap; }
+#day-seg button { flex: 1 0 auto; }
+#day-seg input { flex: 1 1 150px; }
+#radius-seg { flex-wrap: wrap; }
+#radius-seg button.zone { flex: 1 0 100%; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; }
+.row label { flex: 1 1 180px; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px;
   padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--muted); font-size: 13px; }
 .row input { border: 0; background: none; font-weight: 600; min-width: 0; width: 100%; text-align: right; }
 .range { display: grid; gap: 4px; color: var(--muted); font-size: 13px; }
@@ -78,6 +84,7 @@ body.v-uws .places-only, body.v-places .uws-only { display: none !important; }
 .tag { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
 .tag.subway { background: #008938; } .tag.nonprofit { background: #b45309; }
 .tag.development { background: #be185d; } .tag.site { background: #475569; } .tag.me { background: #2563eb; }
+.tag.school { background: #0f766e; }
 
 .tabs { display: flex; gap: 6px; margin-bottom: 8px; }
 .tabs button { font-size: 13px; padding: 8px 6px; }
@@ -126,6 +133,7 @@ body.v-uws .places-only, body.v-places .uws-only { display: none !important; }
 .pin.nonprofit { background: #b45309; }
 .pin.development { background: #be185d; }
 .pin.site { background: #475569; }
+.pin.school { background: #0f766e; }
 .pin.me { background: #2563eb; border-radius: 50%; transform: none; }
 .pin.me span { transform: none; }
 .pin.on { width: 32px; height: 32px; outline: 3px solid #7c3aed; outline-offset: 1px; }

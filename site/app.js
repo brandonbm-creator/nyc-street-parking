@@ -1,6 +1,8 @@
-// Uptown Parking dashboard. Data: data.json (built by `python3 asp.py export`).
+// Manhattan Parking dashboard. Data: data.json (built by `python3 asp.py export`).
 // The street-cleaning logic lives in logic.js (pure, shared with the tests); this file is the UI.
 // Views: "uws" (West Side blocks by street range) and "places" (blocks within a walk of a location or of you).
+// A location can carry its own coverage radius (data/locations.csv `radius`, e.g. the Stuyvesant HS zone from
+// Pier 40 to the Battery); the radius picker then offers that whole zone as an extra option.
 const LG = ParkingLogic;
 const { DAY, fmtTime, addDays, weekday, isValidDate, parseTime, validateWindow, meters, walkMin, yearCovered } = LG;
 
@@ -22,7 +24,9 @@ const HINTS = {
 };
 const PAGE = 40;
 const ME = -1;            // state.place value for "near my current location"
-const RADII = [250, 400, 800];
+const RADII = [250, 400, 800];       // walk radii offered everywhere
+const DEFAULT_COVERAGE = 800;        // how far the data reaches around a location without its own radius
+const ME_COVERAGE = 2000;            // cap for "near me" (the data may not reach that far everywhere)
 const MAX_STREET = 185, MIN_MAX_STREET = 65;
 
 const $ = (s) => document.querySelector(s);
@@ -75,6 +79,18 @@ function daysSince(iso) {
 // ---------------------------------------------------------------- places and status
 const mePlace = () => state.here && { name: "You", kind: "Your current location", type: "me", ...state.here };
 const place = () => (state.place === ME ? mePlace() : DATA.places[state.place]);
+// How far the sign data reaches around p; the radius can never exceed it, or empty map edges would read as "no ASP".
+const coverage = (p) => (!p || p.type === "me" ? ME_COVERAGE : Number.isInteger(p.radius) && p.radius > 0 ? p.radius : DEFAULT_COVERAGE);
+// Radius buttons for p: the standard walks plus the whole zone when the place covers more than the longest walk.
+const radiiFor = (p) => (p && p.type !== "me" && coverage(p) > RADII[RADII.length - 1] ? [...RADII, coverage(p)] : RADII);
+const WALK_LABELS = { 250: "~4 min walk", 400: "~6 min", 800: "~12 min" };
+const isZone = (r, p) => !RADII.includes(r) && p && r === coverage(p);
+const radiusLabel = (r, p) => WALK_LABELS[r] || (isZone(r, p) ? `Whole zone · ~${walkMin(r)} min walk across` : `${r} m`);
+function clampRadius() {
+  if (state.view !== "places") return;
+  const cap = coverage(place());
+  if (state.radius > cap) state.radius = cap;
+}
 // A face with an ASP sign we couldn't read (b.u) is "unknown": never shown as no ASP.
 const statusOf = (b) => (b.u ? { kind: "unknown" } : LG.statusOf(b.s, state.date, state.arrive, state.leave, DATA.holidays, DATA.max_wait));
 const nextLabel = (b, after) => LG.nextCleaningLabel(LG.nextCleaningAt(b.s, state.date, after, DATA.holidays), state.date);
@@ -122,7 +138,9 @@ function renderStatus() {
   const el = $("#status"), iso = state.date, c = counts(rows);
   const win = `${state.now ? "now" : fmtTime(state.arrive)}–${fmtTime(state.leave)}`;
   const p = state.view === "places" && place();
-  const scope = p ? ` within ~${walkMin(state.radius)} min of <b>${p.type === "me" ? "you" : esc(p.name)}</b>` : ` from W 61st to ${ordinal(state.max)} St`;
+  const scope = !p ? ` from W 61st to ${ordinal(state.max)} St`
+    : isZone(state.radius, p) ? ` across the <b>${esc(p.name)}</b> zone (${(state.radius / 1000).toFixed(1)} km around it)`
+    : ` within ~${walkMin(state.radius)} min of <b>${p.type === "me" ? "you" : esc(p.name)}</b>`;
   const set = (cls, big, small) => { el.className = `status ${cls}`; el.innerHTML = `<div class="big">${big}</div><div class="small">${small}</div>`; };
 
   if (state.problem) return set("err", "Check your times", esc(state.problem));
@@ -164,7 +182,9 @@ function placeTile(p, i) {
     return `<button class="area place me ${state.place === ME ? "on" : ""}" data-place="${ME}">
       <div class="name"><i class="tag me"></i>Near me</div><div class="kind">Tap to use your location</div></button>`;
   }
-  const near = state.problem ? [] : nearPlace(p, state.radius), c = counts(near);
+  // A tile never looks past its own coverage: with the Stuyvesant whole zone (1.5 km) selected, an 800 m place stays at 800 m.
+  const r = Math.min(state.radius, coverage(p));
+  const near = state.problem ? [] : nearPlace(p, r), c = counts(near);
   const best = near.find((x) => x.st.kind === "clear");
   const acc = p.type === "me" && p.accuracy ? ` · GPS ±${Math.round(p.accuracy)} m` : "";
   return `<button class="area place ${p.type === "me" ? "me" : ""} ${state.place === i ? "on" : ""}" data-place="${i}">
@@ -303,7 +323,14 @@ function renderFooter() {
     (nc ? ` (${nc} without map coordinates appear in lists only)` : "");
 }
 
+function renderRadius() {
+  const p = state.view === "places" ? place() : null;
+  $("#radius-seg").innerHTML = radiiFor(p).map((r) =>
+    `<button data-r="${r}" class="${isZone(r, p) ? "zone" : ""} ${r === state.radius ? "on" : ""}">${radiusLabel(r, p)}</button>`).join("");
+}
+
 function render({ fit = false } = {}) {
+  clampRadius();
   compute();
   document.body.className = `v-${state.view}`;
   renderStatus();
@@ -311,11 +338,11 @@ function render({ fit = false } = {}) {
   renderTiles();
   renderList();
   renderMap();
+  renderRadius();
   renderFooter();
   const sel = (q, attr, val) => document.querySelectorAll(q).forEach((b) => b.classList.toggle("on", b.dataset[attr] === val));
   sel("#tabs button", "tab", state.tab);
   sel("#view-seg button", "view", state.view);
-  sel("#radius-seg button", "r", String(state.radius));
   const dayIdx = state.now ? "now" : state.date === todayNY() ? "0" : state.date === addDays(todayNY(), 1) ? "1" : null;
   sel("#day-seg button", "day", dayIdx);
   $("#date").value = isValidDate(state.date) ? state.date : "";
@@ -408,18 +435,19 @@ function restore() {
   if (inRange(saved.arrive, 0, 1439)) state.arrive = saved.arrive;
   if (inRange(saved.leave, 0, 1439)) state.leave = saved.leave;
   if (inRange(saved.max, MIN_MAX_STREET, MAX_STREET)) state.max = saved.max;
-  if (RADII.includes(saved.radius)) state.radius = saved.radius;
+  if (inRange(saved.radius, 100, ME_COVERAGE)) state.radius = saved.radius;
   if (saved.view === "places" || saved.view === "uws") state.view = saved.view;
   if (inRange(saved.place, 0, DATA.places.length - 1)) state.place = saved.place;
   if (validateWindow(state.arrive, state.leave)) { state.arrive = 450; state.leave = 720; }
 }
 
-// ?place=4 (1-based) or ?place=me · ?now=1 · ?view=uws|places · ?radius=250|400|800 · ?date=YYYY-MM-DD · ?arrive=9:00 · ?leave=12:00
+// ?place=4 (1-based) or ?place=me · ?now=1 · ?view=uws|places · ?radius=250|400|800 (or a zone's own radius, e.g. 1500;
+// anything past the place's coverage is clamped) · ?date=YYYY-MM-DD · ?arrive=9:00 · ?leave=12:00
 function applyQuery(q) {
   const ignored = [];
   if (q.has("view")) state.view = q.get("view") === "places" ? "places" : "uws";
   const r = Number(q.get("radius"));
-  if (q.has("radius")) { if (inRange(r, 100, 2000)) state.radius = r; else ignored.push("radius"); }
+  if (q.has("radius")) { if (inRange(r, 100, ME_COVERAGE)) state.radius = r; else ignored.push("radius"); }
   const wantMe = q.get("place") === "me";
   const pi = Number(q.get("place")) - 1;
   if (q.has("place") && !wantMe) { if (inRange(pi, 0, DATA.places.length - 1)) Object.assign(state, { view: "places", place: pi }); else ignored.push("place"); }
@@ -470,6 +498,7 @@ async function init() {
     && seg[0].every((d) => Number.isInteger(d) && d >= 0 && d <= 6)
     && Number.isInteger(seg[1]) && Number.isInteger(seg[2]) && seg[1] >= 0 && seg[2] < 1440 && seg[2] > seg[1];
   const finite = (v) => typeof v === "number" && Number.isFinite(v);
+  DATA.places = DATA.places.filter((p) => p && finite(p.lat) && finite(p.lon));
   DATA.blocks.forEach((b, i) => {
     b.i = i;
     b.s = Array.isArray(b.s) ? b.s.filter(validSeg) : [];
@@ -498,7 +527,7 @@ async function init() {
   });
   $("#radius-seg").addEventListener("click", (e) => {
     const r = Number(e.target.dataset.r);
-    if (!RADII.includes(r)) return;
+    if (!radiiFor(state.view === "places" ? place() : null).includes(r)) return;
     Object.assign(state, { radius: r, shown: PAGE });
     save(); render({ fit: true });
   });
