@@ -1,12 +1,15 @@
-# Uptown Manhattan Street Parking · v1.0
+# Manhattan Street Parking · v1.1
 
 ### 👉 Live dashboard: https://brandonbm-creator.github.io/nyc-street-parking/
 
 A map-first, phone-first dashboard of **street cleaning (Alternate Side Parking, "ASP")** for the Upper West Side
-from 61st St up and for our Harlem / Washington Heights locations. It answers one question fast: *where can I
-leave the car without getting swept?*
+from 61st St up, for our Harlem / Washington Heights locations, and for the **Stuyvesant HS zone** downtown
+(Battery Park City from Pier 40 south to the Battery). It answers one question fast: *where can I leave the car
+without getting swept?*
 
 The congestion toll zone covers Manhattan "south of *and including* 60th Street," so 61st is the first toll-free street.
+The Stuyvesant zone is inside the toll zone: the toll is charged once per day on entry, so use that zone when the trip
+downtown is happening anyway.
 
 ## What you get
 
@@ -22,6 +25,9 @@ The congestion toll zone covers Manhattan "south of *and including* 60th Street,
 - **Map** — every block face colored by status; tap a dot for the schedule and directions. Popups stay open
   through the once-a-minute "Now" refresh.
 - **Our locations** — a tile per store and site with a walking ring (~4, ~6, or ~12 min) and blocks sorted by walk time.
+  A location can carry its own coverage radius (`radius` in `data/locations.csv`); the picker then adds a **Whole zone**
+  option. The Stuyvesant HS zone is a 1.5 km circle on 345 Chambers St that takes in Pier 40 (1.28 km north) and
+  the Battery (1.45 km south): about 265 block faces across Battery Park City, Tribeca, Hudson Square and the Civic Center.
 - **Honest states** — the card distinguishes *ASP in effect*, *No ASP*, *ASP suspended (holiday)*, *No blocks in
   range*, *Check your times* (invalid stay) and *Data unavailable*. Banners warn when the sign data is stale, when the
   holiday calendar for the chosen year isn't on file, and when GPS accuracy is wider than the search radius.
@@ -40,11 +46,13 @@ permits aren't included, snow/emergency suspensions aren't predictable, and vaca
 | 4 | National Action Network · 6 Hancock Pl | NAN headquarters | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=4) |
 | 5 | ALIA · 121 Lenox Ave (aka 101 W 116th St) | Nonprofit development | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=5) |
 | 6 | 145 · W 145th St & Lenox Ave | Upcoming development | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=6) |
+| 7 | Stuyvesant HS · 345 Chambers St | Battery Park City zone, Pier 40 to the Battery (inside the toll zone) | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=7&radius=1500) |
 | 📍 | Wherever you are | Phone location + current time | [open](https://brandonbm-creator.github.io/nyc-street-parking/?place=me&now=1) |
 
 Save `?place=me&now=1` to your phone's home screen (Safari: Share → **Add to Home Screen**) for a one-tap
-"find me parking". Deep links: `?place=1..6|me`, `?now=1`, `?view=uws|places`, `?radius=250|400|800`,
-`?date=YYYY-MM-DD`, `?arrive=9:00`, `?leave=12:00` (invalid values are ignored and the app says so).
+"find me parking". Deep links: `?place=1..7|me`, `?now=1`, `?view=uws|places`, `?radius=250|400|800` (or a zone's
+own radius such as `1500`; a radius past the location's coverage is clamped to it), `?date=YYYY-MM-DD`, `?arrive=9:00`,
+`?leave=12:00` (invalid values are ignored and the app says so).
 
 ## How it works
 
@@ -57,7 +65,8 @@ NYC Open Data sign API ─► asp.py fetch ─► data/street_cleaning.csv + dat
 ```
 
 - **`asp.py`** (stdlib only): `fetch` downloads every "sanitation broom" sign in Manhattan, groups them into one
-  schedule per block face, keeps the West Side 61st–185th plus anything within 800 m of a location, converts the
+  schedule per block face, keeps the West Side 61st–185th plus anything within each location's coverage radius
+  (800 m by default, 1,500 m for the Stuyvesant zone), converts the
   sign coordinates (EPSG:2263) to lat/lon, and **refuses** the result if the API schema changed, fewer than
   1,500 schedules came back, or the snapshot shrank by more than 15% (`--force` overrides). Writes are atomic, so a
   crash never leaves a truncated file. `export` validates the snapshot again and writes `site/data.json` with
@@ -83,7 +92,7 @@ python3 asp.py find --arrive 9:00 --leave 9:10 # an explicit stay is kept exactl
 python3 asp.py digest --date 2026-10-16        # markdown digest for a morning (7:30–12:00 by default)
 python3 asp.py fetch                           # refresh the snapshot by hand (don't commit it; CI owns it)
 
-python3 -m unittest discover -s tests -v       # Python tests (40)
+python3 -m unittest discover -s tests -v       # Python tests (43)
 node --test tests/                             # JavaScript tests (10), same fixtures
 ```
 
@@ -97,7 +106,7 @@ node --test tests/                             # JavaScript tests (10), same fix
 | `site/vendor/leaflet/` | Leaflet 1.9.4, vendored so the map doesn't depend on a CDN (BSD-2, see LICENSE) |
 | `asp.py` | `fetch`, `export`, `digest`, `find` |
 | `data/street_cleaning.csv`, `data/snapshot.json` | The validated sign snapshot and its provenance (committed by CI) |
-| `data/locations.csv` | Our stores and sites: `name,kind,type,address,lat,lon`; `type` sets the pin color (subway, nonprofit, development, site) |
+| `data/locations.csv` | Our stores and sites: `name,kind,type,address,lat,lon,radius`; `type` sets the pin color (subway, nonprofit, development, site, school); `radius` (m, optional, default 800, max 3,000) is how far the sign data is kept around the place |
 | `data/asp_suspensions_<year>.csv` | Holiday suspensions per year, verified against the NYC DOT table |
 | `tests/` | `test_asp.py`, `logic.test.js`, `fixtures/cases.json` |
 | `.github/workflows/deploy.yml`, `ci.yml` | Daily refresh + deploy (main only); tests on every pull request |
@@ -123,7 +132,9 @@ Refresh data and deploy dashboard**, press **Enable workflow**, then **Run workf
 Each successful run re-enables the schedule itself.
 
 **Locations.** Edit `data/locations.csv` (lat/lon from
-[NYC GeoSearch](https://geosearch.planninglabs.nyc/v2/search?text=6%20Hancock%20Place%20Manhattan)) and push.
+[NYC GeoSearch](https://geosearch.planninglabs.nyc/v2/search?text=6%20Hancock%20Place%20Manhattan)) and push. Leave
+`radius` blank for a normal location; set it (100–3,000 m) for a place that should cover a whole zone, as Stuyvesant does.
+The next deploy fetches the new area; until then its tile says "no blocks in range".
 
 **Tuning.** The wait & take threshold is `MAX_WAIT` in `asp.py`, `site/logic.js`, and `tests/fixtures/cases.json`
 (`max_wait`); the tests fail if they disagree.

@@ -1,7 +1,7 @@
 {
-  "name": "Uptown Parking",
+  "name": "Manhattan Parking",
   "short_name": "Parking",
-  "description": "Street-cleaning (ASP) parking finder for the Upper West Side and our uptown locations.",
+  "description": "Street-cleaning (ASP) parking finder for the Upper West Side, our uptown locations and the Stuyvesant HS zone.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

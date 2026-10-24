@@ -1,7 +1,8 @@
-name,kind,type,address,lat,lon
-Subway · 3559 Broadway,Restaurant #40614 · Hamilton Hts,subway,"3559 Broadway at W 146th St (same building as 600 W 146th St)",40.826978,-73.950469
-Subway · 3920 Broadway,Restaurant #24100 · Washington Hts,subway,"3920 Broadway at W 164th-165th St",40.838567,-73.941184
-Subway · 1502 St Nicholas,Restaurant #46882 · Washington Hts,subway,"1502 St Nicholas Ave at W 185th-186th St",40.851739,-73.931647
-National Action Network,Headquarters,nonprofit,"6 Hancock Pl at W 124th-125th St",40.810136,-73.953837
-ALIA · 121 Lenox Ave,Nonprofit development,nonprofit,"121 Lenox Ave (aka 101 W 116th St) at NW corner of W 116th St",40.802502,-73.950050
-145 · 145th & Lenox,Upcoming development,development,"W 145th St & Lenox Ave",40.820300,-73.937000
+name,kind,type,address,lat,lon,radius
+Subway · 3559 Broadway,Restaurant #40614 · Hamilton Hts,subway,3559 Broadway at W 146th St (same building as 600 W 146th St),40.826978,-73.950469,
+Subway · 3920 Broadway,Restaurant #24100 · Washington Hts,subway,3920 Broadway at W 164th-165th St,40.838567,-73.941184,
+Subway · 1502 St Nicholas,Restaurant #46882 · Washington Hts,subway,1502 St Nicholas Ave at W 185th-186th St,40.851739,-73.931647,
+National Action Network,Headquarters,nonprofit,6 Hancock Pl at W 124th-125th St,40.810136,-73.953837,
+ALIA · 121 Lenox Ave,Nonprofit development,nonprofit,121 Lenox Ave (aka 101 W 116th St) at NW corner of W 116th St,40.802502,-73.950050,
+145 · 145th & Lenox,Upcoming development,development,W 145th St & Lenox Ave,40.820300,-73.937000,
+Stuyvesant HS · 345 Chambers St,Battery Park City · Pier 40 to the Battery,school,345 Chambers St at North End Ave (Battery Park City); zone runs from Pier 40 south to the Battery,40.717951,-74.013799,1500
