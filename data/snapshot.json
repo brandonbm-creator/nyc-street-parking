@@ -2,7 +2,7 @@
   "schema": 1,
   "source": "NYC Open Data nfid-uabd",
   "api": "https://data.cityofnewyork.us/resource/nfid-uabd.json",
-  "source_fetched_at": "2026-11-02T15:23-05:00",
+  "source_fetched_at": "2026-11-03T12:51-05:00",
   "signs": 20296,
   "schedules": 2877,
   "faces": 2806,
