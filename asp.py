@@ -39,7 +39,8 @@ REQUIRED_FIELDS = ("on_street", "from_street", "to_street", "side_of_street", "s
 MIN_SCHEDULES = 1500   # a snapshot with fewer schedules than this is rejected outright
 MIN_RATIO = 0.85       # a new snapshot must keep at least this share of the previous one (unless --force)
 STALE_DAYS = 7         # warn when the sign data is older than this
-NEAR_METERS = 800      # keep any block face this close to one of our locations
+NEAR_METERS = 800      # default coverage around a location (data/locations.csv `radius` overrides it)
+MAX_NEAR_METERS = 3000 # largest per-location coverage radius accepted
 WALK_METERS = 400      # "nearby" in the digest: about a 6-minute walk
 MAX_WAIT = 45          # wait & take: longest worthwhile wait for a cleaning window's halfway mark
 HORIZON_DAYS = 14      # how far ahead next_cleaning looks
@@ -294,8 +295,26 @@ def write_atomic(path, text):
 
 
 def load_locations():
+    """data/locations.csv rows with float lat/lon and an int `radius` (meters of coverage around the place).
+
+    `radius` is optional per row (blank = NEAR_METERS); a non-integer or out-of-range value is a DataError
+    so a typo can't silently shrink or blow up the fetch.
+    """
+    out = []
     with LOCATIONS_CSV.open(encoding="utf-8") as f:
-        return [{**r, "lat": float(r["lat"]), "lon": float(r["lon"])} for r in csv.DictReader(f)]
+        for r in csv.DictReader(f):
+            raw = (r.get("radius") or "").strip()
+            try:
+                radius = int(raw) if raw else NEAR_METERS
+                lat, lon = float(r["lat"]), float(r["lon"])
+            except (KeyError, TypeError, ValueError):
+                raise DataError(f"{rel(LOCATIONS_CSV)}: bad lat/lon/radius for {r.get('name')!r}")
+            if not valid_latlon(lat, lon):
+                raise DataError(f"{rel(LOCATIONS_CSV)}: {r.get('name')!r} is not inside New York City")
+            if not 100 <= radius <= MAX_NEAR_METERS:
+                raise DataError(f"{rel(LOCATIONS_CSV)}: radius for {r.get('name')!r} must be 100-{MAX_NEAR_METERS} m")
+            out.append({**r, "lat": lat, "lon": lon, "radius": radius})
+    return out
 
 
 def read_calendars():
@@ -399,7 +418,8 @@ def build_schedules(rows, min_street, max_street, places):
     """Group sign rows into one schedule per (block face, days, start, end).
 
     Returns (csv_rows, meta). Kept faces are West Side blocks in [min_street, max_street] (scope=west)
-    plus anything within NEAR_METERS of one of our locations (scope=near).
+    plus anything within a location's coverage radius (scope=near; `radius` in data/locations.csv,
+    NEAR_METERS by default, larger for a whole zone such as Battery Park City around Stuyvesant HS).
     """
     groups, skipped = defaultdict(lambda: {"signs": 0, "orders": set()}), 0
     coords = defaultdict(list)  # block face -> [(x, y), ...] for a map pin
@@ -437,7 +457,7 @@ def build_schedules(rows, min_street, max_street, places):
         if in_west[face]:
             return "west"
         ll = latlon.get(face)
-        if ll and any(meters(ll, (p["lat"], p["lon"])) <= NEAR_METERS for p in places):
+        if ll and any(meters(ll, (p["lat"], p["lon"])) <= p.get("radius", NEAR_METERS) for p in places):
             return "near"
         return None
 
@@ -565,7 +585,7 @@ def build_site_data(now=None):
         "max_wait": MAX_WAIT,
         "holiday_years": suspension_years(),
         "holidays": load_suspensions(),
-        "places": [{k: p[k] for k in ("name", "kind", "type", "address", "lat", "lon")} for p in load_locations()],
+        "places": [{k: p[k] for k in ("name", "kind", "type", "address", "lat", "lon", "radius")} for p in load_locations()],
         "stats": {"schedules": n, "faces": len(faces),
                   "faces_without_coords": sum(1 for b in faces if b["lat"] is None),
                   "faces_unknown": sum(1 for b in faces if b.get("u"))},

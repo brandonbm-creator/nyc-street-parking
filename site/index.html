@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#0f172a">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Parking">
-  <meta name="description" content="Upper Manhattan street-cleaning (ASP) parking finder: Upper West Side from 61st St and our Harlem and Washington Heights locations.">
-  <title>Uptown Parking</title>
+  <meta name="description" content="Manhattan street-cleaning (ASP) parking finder: Upper West Side from 61st St, our Harlem and Washington Heights locations, and the Stuyvesant HS zone from Pier 40 to the Battery.">
+  <title>Manhattan Parking</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
   <link rel="stylesheet" href="style.css">
@@ -17,8 +17,8 @@
     <section class="panel">
       <header class="top">
         <div>
-          <h1>Uptown Parking</h1>
-          <p class="sub">Street cleaning (ASP) · W 61st St and up · Subway stores, NAN, ALIA, 145</p>
+          <h1>Manhattan Parking</h1>
+          <p class="sub">Street cleaning (ASP) · W 61st St and up · Subway stores, NAN, ALIA, 145 · Stuyvesant HS zone</p>
         </div>
       </header>
 
@@ -43,7 +43,8 @@
         <label class="range uws-only"><span>Up to <b id="max-label">110th</b> St</span>
           <input type="range" id="max" min="65" max="185" step="1" value="110">
         </label>
-        <div class="seg places-only" id="radius-seg">
+        <div class="seg places-only" id="radius-seg" aria-label="Search radius">
+          <!-- filled by app.js: ~4 / ~6 / ~12 min walks, plus "Whole zone" for a location with its own coverage radius -->
           <button data-r="250">~4 min walk</button>
           <button data-r="400" class="on">~6 min</button>
           <button data-r="800">~12 min</button>
@@ -71,7 +72,7 @@
           time even after the sweeper passes (<a href="https://portal.311.nyc.gov/article/?kanumber=KA-01011" target="_blank" rel="noopener">NYC311</a>).
           Snow/emergency suspensions: <a href="https://www.nyc.gov/html/dot/html/motorist/alternate-side-parking.shtml" target="_blank" rel="noopener">NYC DOT</a> · 311.</p>
         <p id="generated" class="muted"></p>
-        <p class="muted">v1.0 · <a href="https://github.com/brandonbm-creator/nyc-street-parking" target="_blank" rel="noopener">source</a></p>
+        <p class="muted">v1.1 · <a href="https://github.com/brandonbm-creator/nyc-street-parking" target="_blank" rel="noopener">source</a></p>
       </footer>
     </section>
 

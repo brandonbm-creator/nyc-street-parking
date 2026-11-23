@@ -292,6 +292,34 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(all(r[-2] == "west" for r in csv_rows))
         self.assertEqual([r[-1] for r in csv_rows].count(1), 1)
 
+    def test_locations_radius_defaults_and_validates(self):
+        places = asp.load_locations()                      # the fixture file has no radius column
+        self.assertEqual([p["radius"] for p in places], [asp.NEAR_METERS])
+        loc = asp.LOCATIONS_CSV
+        loc.write_text("name,kind,type,address,lat,lon,radius\nA,k,site,addr,40.8101,-73.9538,\nB,k,site,addr,40.8101,-73.9538,1500\n",
+                       encoding="utf-8")
+        self.assertEqual([p["radius"] for p in asp.load_locations()], [asp.NEAR_METERS, 1500])
+        for bad in ("abc", "50", str(asp.MAX_NEAR_METERS + 1), "-800"):
+            loc.write_text(f"name,kind,type,address,lat,lon,radius\nA,k,site,addr,40.8101,-73.9538,{bad}\n", encoding="utf-8")
+            with self.assertRaises(asp.DataError, msg=bad):
+                asp.load_locations()
+        loc.write_text("name,kind,type,address,lat,lon\nA,k,site,addr,51.5,-0.1\n", encoding="utf-8")
+        with self.assertRaises(asp.DataError):
+            asp.load_locations()                           # London is not in New York City
+
+    def test_build_schedules_uses_each_locations_radius(self):
+        """A downtown face ~1.2 km from a location is kept only when that location's radius reaches it."""
+        lat, lon = asp.state_plane_to_latlon(990000, 225000)
+        far = {**sign(0), "on_street": "CHAMBERS STREET", "from_street": "WEST STREET", "to_street": "NORTH END AVENUE",
+               "sign_x_coord": "994000", "sign_y_coord": "225000"}      # 4,000 ft (~1,219 m) east, no street number
+        rows = [sign(i) for i in range(10)] + [far]
+        for radius, expected in ((800, 10), (1500, 11)):
+            asp.LOCATIONS_CSV.write_text(f"name,kind,type,address,lat,lon,radius\nZone,k,school,addr,{lat},{lon},{radius}\n",
+                                         encoding="utf-8")
+            csv_rows, meta = asp.build_schedules(rows, 61, 185, asp.load_locations())
+            self.assertEqual(meta["faces"], expected, radius)
+            self.assertEqual([r[-2] for r in csv_rows].count("near"), expected - 10, radius)
+
     def test_export_builds_site_data(self):
         self.good_fetch(40)
         asp.export(argparse.Namespace(min_schedules=5, force=False))
@@ -305,6 +333,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(out["max_wait"], asp.MAX_WAIT)
         self.assertEqual(out["stats"], {"schedules": 40, "faces": 40, "faces_without_coords": 0, "faces_unknown": 0})
         self.assertEqual(len(out["places"]), 1)
+        self.assertEqual(out["places"][0]["radius"], asp.NEAR_METERS)
         b = out["blocks"][0]
         self.assertEqual(set(b), {"n", "on", "from", "to", "side", "lat", "lon", "s"})
         self.assertEqual(b["s"], [[[0, 3], 540, 630]])
@@ -462,10 +491,20 @@ class CommittedDataTests(unittest.TestCase):
                 rows = list(__import__("csv").DictReader(f))
             self.assertTrue(all(r["date"].startswith(f"{year}-") for r in rows), p.name)
 
-    def test_locations_are_in_upper_manhattan(self):
+    def test_locations_are_in_manhattan_with_sane_coverage(self):
         for p in asp.load_locations():
-            self.assertTrue(40.79 < p["lat"] < 40.87 and -73.97 < p["lon"] < -73.92, p["name"])
-            self.assertIn(p["type"], {"subway", "nonprofit", "development", "site"})
+            self.assertTrue(40.70 < p["lat"] < 40.87 and -74.03 < p["lon"] < -73.92, p["name"])
+            self.assertIn(p["type"], {"subway", "nonprofit", "development", "site", "school"})
+            self.assertTrue(100 <= p["radius"] <= asp.MAX_NEAR_METERS, p["name"])
+
+    def test_stuyvesant_zone_reaches_pier_40_and_the_battery(self):
+        """The downtown zone is a circle on Stuyvesant HS that must take in Pier 40 (north) and the Battery (south)."""
+        stuy = next(p for p in asp.load_locations() if "Stuyvesant" in p["name"])
+        here = (stuy["lat"], stuy["lon"])
+        pier_40, battery = (40.72944, -74.0128), (40.704967, -74.014613)   # NYC GeoSearch
+        self.assertLessEqual(asp.meters(here, pier_40), stuy["radius"])
+        self.assertLessEqual(asp.meters(here, battery), stuy["radius"])
+        self.assertEqual(stuy["type"], "school")
 
 
 if __name__ == "__main__":
